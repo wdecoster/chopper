@@ -1,5 +1,6 @@
 // based on https://docs.rs/bio/0.32.0/bio/io/fastq/index.html#read-and-write
 
+extern crate bio;
 use std::io;
 use bio::io::fastq;
 use bio::io::fastq::FastqRead;
@@ -12,15 +13,23 @@ fn main() {
 
     while let Ok(()) = reader.read(&mut record) {
         if record.is_empty() {
-            let check = record.check();
             break;
         }
 
-        let mut sum_qual = record.qual().iter().sum::<u8>() as f64;
+        let average_qual = ave_qual(record.qual());
+        let read_len = record.seq().len() as f64;
 
-        if (sum_qual / record.seq().len() as f64 - 33.0) > 30.0 {
-            writer.write_record(&record);
+        if average_qual >= 3.0 && read_len > 20.0 && read_len < 1000.0 {
+            writer.write_record(&record).unwrap_or_else(|error| {
+                panic!("Problem writing to stdout: {:?}", error);
+            })
         }
     }
 
 }
+
+fn ave_qual(quals: &[u8]) -> f64 {
+    let probability_sum = quals.iter().map(|q| 10_f64.powf((*q as f64 - 33.0) / -10.0)).sum::<f64>();
+    (probability_sum / quals.len() as f64).log10() * -10.0
+}
+
