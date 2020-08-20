@@ -15,11 +15,10 @@ fn main() {
         if record.is_empty() {
             break;
         }
+        let average_quality = ave_qual(record.qual());
+        let read_len = record.seq().len();
 
-        let average_qual = ave_qual(record.qual());
-        let read_len = record.seq().len() as f64;
-
-        if average_qual >= 3.0 && read_len > 20.0 && read_len < 1000.0 {
+        if average_quality >= minqual && read_len >= minlen && read_len <= maxlen {
             writer.write_record(&record).unwrap_or_else(|error| {
                 panic!("Problem writing to stdout: {:?}", error);
             })
