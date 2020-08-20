@@ -62,7 +62,7 @@ fn get_args() -> Config {
 fn is_int(v: String) -> Result<(), String> {
     match v.parse::<i32>() {
         Ok(_i) => Ok(()),
-        Err(_e) => Err(String::from("The value should be a valid integer"))
+        Err(_e) => Err(String::from("The value should be a positive integer!"))
     }
 }
 
@@ -92,3 +92,7 @@ fn ave_qual(quals: &[u8]) -> f64 {
     (probability_sum / quals.len() as f64).log10() * -10.0
 }
 
+// FEATURES TO ADD
+// headcrop & tailcrop
+// Write test for ave_qual
+// package

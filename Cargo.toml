@@ -1,5 +1,5 @@
 [package]
-name = "nanofiltrs"
+name = "nanofilt"
 version = "0.1.0"
 authors = ["wdecoster <decosterwouter@gmail.com>"]
 edition = "2018"
@@ -8,3 +8,4 @@ edition = "2018"
 
 [dependencies]
 bio = "*"
+clap = "2.33.3"
