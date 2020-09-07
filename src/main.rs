@@ -11,13 +11,15 @@ use bio::io::fastq::FastqRead;
 
 fn main() {
     let config = get_args();
-    filter(config.minqual, config.minlen, config.maxlen)
+    filter(config.minqual, config.minlen, config.maxlen, config.headcrop, config.tailcrop)
 }
 
 struct Config {
     minqual: f64,
     minlen: usize,
-    maxlen: usize
+    maxlen: usize,
+    headcrop: usize,
+    tailcrop: usize,
 }
 
 impl Config {
@@ -25,7 +27,9 @@ impl Config {
         let minqual: f64 = matches.value_of("quality").unwrap().parse().unwrap();
         let minlen: usize = matches.value_of("minlength").unwrap().parse().unwrap();
         let maxlen: usize = matches.value_of("maxlength").unwrap().parse().unwrap();
-        Config { minqual, minlen, maxlen }
+        let headcrop: usize = matches.value_of("headcrop").unwrap().parse().unwrap();
+        let tailcrop: usize = matches.value_of("headcrop").unwrap().parse().unwrap();
+        Config { minqual, minlen, maxlen, headcrop, tailcrop }
     }
 }
 
@@ -55,6 +59,18 @@ fn get_args() -> Config {
                             .takes_value(true)
                             .default_value("2147483647") // largest i32
                             .validator(is_int))
+                       .arg(Arg::with_name("headcrop")
+                            .long("headcrop")
+                            .help("Trim N nucleotides from the start of a read")
+                            .takes_value(true)
+                            .default_value("0")
+                            .validator(is_int))
+                       .arg(Arg::with_name("tailcrop")
+                            .long("tailcrop")
+                            .help("Trim N nucleotides from the end of a read")
+                            .takes_value(true)
+                            .default_value("0")
+                            .validator(is_int))
                       .get_matches();
     Config::new(matches)
 }
@@ -66,9 +82,8 @@ fn is_int(v: String) -> Result<(), String> {
     }
 }
 
-fn filter(minqual: f64, minlen: usize, maxlen: usize) {
+fn filter(minqual: f64, minlen: usize, maxlen: usize, headcrop: usize, tailcrop:usize) {
     let mut reader = fastq::Reader::new(io::stdin());
-    let mut writer = fastq::Writer::new(io::stdout());
     let mut record = fastq::Record::new();
 
     while let Ok(()) = reader.read(&mut record) {
@@ -77,11 +92,17 @@ fn filter(minqual: f64, minlen: usize, maxlen: usize) {
         }
         let average_quality = ave_qual(record.qual());
         let read_len = record.seq().len();
-
+        if headcrop + tailcrop > read_len { continue }
         if average_quality >= minqual && read_len >= minlen && read_len <= maxlen {
-            writer.write_record(&record).unwrap_or_else(|error| {
-                panic!("Problem writing to stdout: {:?}", error);
-            })
+            let header = match record.desc() {
+                Some(d) => format!("{} {}", record.id(), d),
+                None => record.id().to_owned(),
+            };
+            // Could consider to use unsafe `from_utf8_unchecked`
+            println!("@{}\n{}\n+\n{}",
+                header,
+                std::str::from_utf8(&record.seq()[headcrop..read_len-tailcrop]).unwrap(),
+                std::str::from_utf8(&record.qual()[headcrop..read_len-tailcrop]).unwrap());
         }
     }
 
@@ -93,6 +114,5 @@ fn ave_qual(quals: &[u8]) -> f64 {
 }
 
 // FEATURES TO ADD
-// headcrop & tailcrop
 // Write test for ave_qual
 // package
