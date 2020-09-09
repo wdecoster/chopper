@@ -23,6 +23,9 @@ struct Config {
 }
 
 impl Config {
+    // Create a config object from matches returned by get_args: clap arguments
+    // These values are checked by is_int to be valid integers
+    // and therefore calling unwrap() should be okay.
     fn new(matches: clap::ArgMatches) -> Config {
         let minqual: f64 = matches.value_of("quality").unwrap().parse().unwrap();
         let minlen: usize = matches.value_of("minlength").unwrap().parse().unwrap();
@@ -57,7 +60,8 @@ fn get_args() -> Config {
                             .long("maxlength")
                             .help("Sets a maximum read length")
                             .takes_value(true)
-                            .default_value("2147483647") // largest i32
+                            // Default is largest i32. Better would be to explicitly use Inf, but couldn't figure it out.
+                            .default_value("2147483647")
                             .validator(is_int))
                        .arg(Arg::with_name("headcrop")
                             .long("headcrop")
@@ -75,13 +79,15 @@ fn get_args() -> Config {
     Config::new(matches)
 }
 
+// Function to check if the supplied (string) argument on the command line are actually integers.
 fn is_int(v: String) -> Result<(), String> {
     match v.parse::<i32>() {
         Ok(_i) => Ok(()),
         Err(_e) => Err(String::from("The value should be a positive integer!"))
     }
 }
-
+/// This function filters fastq on stdin based on quality, maxlength and minlength
+/// and applies trimming before writting to stdout
 fn filter(minqual: f64, minlen: usize, maxlen: usize, headcrop: usize, tailcrop:usize) {
     let mut reader = fastq::Reader::new(io::stdin());
     let mut record = fastq::Record::new();
@@ -92,12 +98,15 @@ fn filter(minqual: f64, minlen: usize, maxlen: usize, headcrop: usize, tailcrop:
         }
         let average_quality = ave_qual(record.qual());
         let read_len = record.seq().len();
+        // If a read is shorter than what is to be cropped the read is dropped entirely (filtered out)
         if headcrop + tailcrop > read_len { continue }
         if average_quality >= minqual && read_len >= minlen && read_len <= maxlen {
+            // Check if a description attribute is present, taken from the bio-rust code to format fastq
             let header = match record.desc() {
                 Some(d) => format!("{} {}", record.id(), d),
                 None => record.id().to_owned(),
             };
+            // Print out the records passing the filters, applying trimming on seq and qual
             // Could consider to use unsafe `from_utf8_unchecked`
             println!("@{}\n{}\n+\n{}",
                 header,
@@ -108,6 +117,9 @@ fn filter(minqual: f64, minlen: usize, maxlen: usize, headcrop: usize, tailcrop:
 
 }
 
+/// This function calculates the average quality of a read, and does this correctly
+/// First the Phred scores are converted to probabilities (10^(q-33)/-10) and summed
+/// and then divided by the number of bases/scores and converted to Phred again -10*log10(average)
 fn ave_qual(quals: &[u8]) -> f64 {
     let probability_sum = quals.iter().map(|q| 10_f64.powf((*q as f64 - 33.0) / -10.0)).sum::<f64>();
     (probability_sum / quals.len() as f64).log10() * -10.0
@@ -115,4 +127,5 @@ fn ave_qual(quals: &[u8]) -> f64 {
 
 // FEATURES TO ADD
 // Write test for ave_qual
+// write integration tests
 // package
