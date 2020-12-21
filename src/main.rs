@@ -96,10 +96,10 @@ fn filter(minqual: f64, minlen: usize, maxlen: usize, headcrop: usize, tailcrop:
         if record.is_empty() {
             break;
         }
-        let average_quality = ave_qual(record.qual());
         let read_len = record.seq().len();
         // If a read is shorter than what is to be cropped the read is dropped entirely (filtered out)
         if headcrop + tailcrop > read_len { continue }
+        let average_quality = ave_qual(record.qual());
         if average_quality >= minqual && read_len >= minlen && read_len <= maxlen {
             // Check if a description attribute is present, taken from the bio-rust code to format fastq
             let header = match record.desc() {
