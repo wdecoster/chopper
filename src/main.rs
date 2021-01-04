@@ -3,15 +3,21 @@
 extern crate bio;
 extern crate clap;
 
-use clap::{Arg, App};
-use std::io;
 use bio::io::fastq;
 use bio::io::fastq::FastqRead;
-
+use clap::{App, Arg};
+use rayon::prelude::*;
+use std::io;
 
 fn main() {
     let config = get_args();
-    filter(config.minqual, config.minlen, config.maxlen, config.headcrop, config.tailcrop)
+    filter(
+        config.minqual,
+        config.minlen,
+        config.maxlen,
+        config.headcrop,
+        config.tailcrop,
+    )
 }
 
 struct Config {
@@ -32,7 +38,13 @@ impl Config {
         let maxlen: usize = matches.value_of("maxlength").unwrap().parse().unwrap();
         let headcrop: usize = matches.value_of("headcrop").unwrap().parse().unwrap();
         let tailcrop: usize = matches.value_of("headcrop").unwrap().parse().unwrap();
-        Config { minqual, minlen, maxlen, headcrop, tailcrop }
+        Config {
+            minqual,
+            minlen,
+            maxlen,
+            headcrop,
+            tailcrop,
+        }
     }
 }
 
@@ -83,7 +95,7 @@ fn get_args() -> Config {
 fn is_int(v: String) -> Result<(), String> {
     match v.parse::<i32>() {
         Ok(_i) => Ok(()),
-        Err(_e) => Err(String::from("The value should be a positive integer!"))
+        Err(_e) => Err(String::from("The value should be a positive integer!")),
     }
 }
 /// This function filters fastq on stdin based on quality, maxlength and minlength
@@ -121,7 +133,10 @@ fn filter(minqual: f64, minlen: usize, maxlen: usize, headcrop: usize, tailcrop:
 /// First the Phred scores are converted to probabilities (10^(q-33)/-10) and summed
 /// and then divided by the number of bases/scores and converted to Phred again -10*log10(average)
 fn ave_qual(quals: &[u8]) -> f64 {
-    let probability_sum = quals.iter().map(|q| 10_f64.powf((*q as f64 - 33.0) / -10.0)).sum::<f64>();
+    let probability_sum = quals
+        .iter()
+        .map(|q| 10_f64.powf((*q as f64 - 33.0) / -10.0))
+        .sum::<f64>();
     (probability_sum / quals.len() as f64).log10() * -10.0
 }
 
