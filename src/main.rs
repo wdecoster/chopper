@@ -4,7 +4,6 @@ extern crate bio;
 extern crate clap;
 
 use bio::io::fastq;
-use bio::io::fastq::FastqRead;
 use clap::{App, Arg};
 use rayon::prelude::*;
 use std::io;
@@ -100,33 +99,38 @@ fn is_int(v: String) -> Result<(), String> {
 }
 /// This function filters fastq on stdin based on quality, maxlength and minlength
 /// and applies trimming before writting to stdout
-fn filter(minqual: f64, minlen: usize, maxlen: usize, headcrop: usize, tailcrop:usize) {
-    let mut reader = fastq::Reader::new(io::stdin());
-    let mut record = fastq::Record::new();
-
-    while let Ok(()) = reader.read(&mut record) {
-        if record.is_empty() {
-            break;
-        }
-        let read_len = record.seq().len();
-        // If a read is shorter than what is to be cropped the read is dropped entirely (filtered out)
-        if headcrop + tailcrop > read_len { continue }
-        let average_quality = ave_qual(record.qual());
-        if average_quality >= minqual && read_len >= minlen && read_len <= maxlen {
-            // Check if a description attribute is present, taken from the bio-rust code to format fastq
-            let header = match record.desc() {
-                Some(d) => format!("{} {}", record.id(), d),
-                None => record.id().to_owned(),
-            };
-            // Print out the records passing the filters, applying trimming on seq and qual
-            // Could consider to use unsafe `from_utf8_unchecked`
-            println!("@{}\n{}\n+\n{}",
-                header,
-                std::str::from_utf8(&record.seq()[headcrop..read_len-tailcrop]).unwrap(),
-                std::str::from_utf8(&record.qual()[headcrop..read_len-tailcrop]).unwrap());
-        }
-    }
-
+fn filter(minqual: f64, minlen: usize, maxlen: usize, headcrop: usize, tailcrop: usize) {
+    fastq::Reader::new(io::stdin())
+        .records()
+        .into_iter()
+        .par_bridge()
+        .for_each(|record| {
+            let record = record.unwrap();
+            if !record.is_empty() {
+                let read_len = record.seq().len();
+                // If a read is shorter than what is to be cropped the read is dropped entirely (filtered out)
+                if headcrop + tailcrop < read_len {
+                    let average_quality = ave_qual(record.qual());
+                    if average_quality >= minqual && read_len >= minlen && read_len <= maxlen {
+                        // Check if a description attribute is present, taken from the bio-rust code to format fastq
+                        let header = match record.desc() {
+                            Some(d) => format!("{} {}", record.id(), d),
+                            None => record.id().to_owned(),
+                        };
+                        // Print out the records passing the filters, applying trimming on seq and qual
+                        // Could consider to use unsafe `from_utf8_unchecked`
+                        println!(
+                            "@{}\n{}\n+\n{}",
+                            header,
+                            std::str::from_utf8(&record.seq()[headcrop..read_len - tailcrop])
+                                .unwrap(),
+                            std::str::from_utf8(&record.qual()[headcrop..read_len - tailcrop])
+                                .unwrap()
+                        );
+                    }
+                }
+            }
+        });
 }
 
 /// This function calculates the average quality of a read, and does this correctly

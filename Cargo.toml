@@ -9,3 +9,4 @@ edition = "2018"
 [dependencies]
 bio = "*"
 clap = "2.33.3"
+rayon = "*"
