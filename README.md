@@ -1,5 +1,5 @@
 # nanofilt
-Rust implementation of [NanoFilt](https://github.com/wdecoster/nanofilt), originally written in Python. This tool filters and trims a fastq file as was originally intended for long read sequencing such as PacBio or ONT.  
+Rust implementation of [NanoFilt](https://github.com/wdecoster/nanofilt), originally written in Python. This tool,  intended for long read sequencing such as PacBio or ONT, filters and trims a fastq file.  
 Filtering is done on average read quality and minimal or maximal read length, and applying a headcrop (start of read) and tailcrop (end of read) while printing the reads passing the filter.
 
 Compared to the Python implementation the scope is to deliver the same results, almost the same functionality, at much faster execution times. At the moment this tool does not support filtering using a sequencing_summary file or filtering on GC content. If those features are of interest then please reach out.  
@@ -16,11 +16,12 @@ FLAGS:
     -V, --version    Prints version information
 
 OPTIONS:
-        --headcrop <headcrop>      Trim N nucleotides from the start of a read [default: 0]
-        --maxlength <maxlength>    Sets a maximum read length [default: 2147483647]
-    -l, --minlength <minlength>    Sets a minimum read length [default: 1]
-    -q, --quality <quality>        Sets a minimum Phred average quality score [default: 0]
-        --tailcrop <tailcrop>      Trim N nucleotides from the end of a read [default: 0]
+        --headcrop      Trim N nucleotides from the start of a read [default: 0]
+        --maxlength     Sets a maximum read length [default: 2147483647]
+    -l, --minlength     Sets a minimum read length [default: 1]
+    -q, --quality       Sets a minimum Phred average quality score [default: 0]
+        --tailcrop      Trim N nucleotides from the end of a read [default: 0]
+        --threads       Number of parallel threads to use [default: 4]
 ```
 
 EXAMPLE:  
