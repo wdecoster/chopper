@@ -16,6 +16,7 @@ fn main() {
         config.maxlen,
         config.headcrop,
         config.tailcrop,
+        config.threads,
     )
 }
 
@@ -25,6 +26,7 @@ struct Config {
     maxlen: usize,
     headcrop: usize,
     tailcrop: usize,
+    threads: usize,
 }
 
 impl Config {
@@ -37,12 +39,14 @@ impl Config {
         let maxlen: usize = matches.value_of("maxlength").unwrap().parse().unwrap();
         let headcrop: usize = matches.value_of("headcrop").unwrap().parse().unwrap();
         let tailcrop: usize = matches.value_of("headcrop").unwrap().parse().unwrap();
+        let threads: usize = matches.value_of("threads").unwrap().parse().unwrap();
         Config {
             minqual,
             minlen,
             maxlen,
             headcrop,
             tailcrop,
+            threads,
         }
     }
 }
@@ -86,6 +90,12 @@ fn get_args() -> Config {
                             .takes_value(true)
                             .default_value("0")
                             .validator(is_int))
+                        .arg(Arg::with_name("threads")
+                             .long("threads")
+                             .help("Use N parallel threads")
+                             .takes_value(true)
+                             .default_value("4")
+                             .validator(is_int))
                       .get_matches();
     Config::new(matches)
 }
@@ -99,7 +109,18 @@ fn is_int(v: String) -> Result<(), String> {
 }
 /// This function filters fastq on stdin based on quality, maxlength and minlength
 /// and applies trimming before writting to stdout
-fn filter(minqual: f64, minlen: usize, maxlen: usize, headcrop: usize, tailcrop: usize) {
+fn filter(
+    minqual: f64,
+    minlen: usize,
+    maxlen: usize,
+    headcrop: usize,
+    tailcrop: usize,
+    threads: usize,
+) {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .build_global()
+        .unwrap();
     fastq::Reader::new(io::stdin())
         .records()
         .into_iter()
