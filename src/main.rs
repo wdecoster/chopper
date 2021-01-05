@@ -155,16 +155,22 @@ fn filter(
 }
 
 /// This function calculates the average quality of a read, and does this correctly
-/// First the Phred scores are converted to probabilities (10^(q-33)/-10) and summed
+/// First the Phred scores are converted to probabilities (10^(q)/-10) and summed
 /// and then divided by the number of bases/scores and converted to Phred again -10*log10(average)
 fn ave_qual(quals: &[u8]) -> f64 {
     let probability_sum = quals
         .iter()
-        .map(|q| 10_f64.powf((*q as f64 - 33.0) / -10.0))
+        .map(|q| 10_f64.powf((*q as f64) / -10.0))
         .sum::<f64>();
     (probability_sum / quals.len() as f64).log10() * -10.0
 }
 
+#[test]
+fn test_ave_qual() {
+    extern crate approx;
+    assert_eq!(ave_qual(&vec![10]), 10.0);
+    approx::abs_diff_eq!(ave_qual(&vec![10, 11, 12]), 10.923583702678473);
+}
 // FEATURES TO ADD
 // Write test for ave_qual
 // write integration tests
