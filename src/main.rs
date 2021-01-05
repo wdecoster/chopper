@@ -10,14 +10,7 @@ use std::io;
 
 fn main() {
     let config = get_args();
-    filter(
-        config.minqual,
-        config.minlen,
-        config.maxlen,
-        config.headcrop,
-        config.tailcrop,
-        config.threads,
-    )
+    filter(config)
 }
 
 struct Config {
@@ -109,16 +102,9 @@ fn is_int(v: String) -> Result<(), String> {
 }
 /// This function filters fastq on stdin based on quality, maxlength and minlength
 /// and applies trimming before writting to stdout
-fn filter(
-    minqual: f64,
-    minlen: usize,
-    maxlen: usize,
-    headcrop: usize,
-    tailcrop: usize,
-    threads: usize,
-) {
+fn filter(config: Config) {
     rayon::ThreadPoolBuilder::new()
-        .num_threads(threads)
+        .num_threads(config.threads)
         .build_global()
         .unwrap();
     fastq::Reader::new(io::stdin())
@@ -130,9 +116,12 @@ fn filter(
             if !record.is_empty() {
                 let read_len = record.seq().len();
                 // If a read is shorter than what is to be cropped the read is dropped entirely (filtered out)
-                if headcrop + tailcrop < read_len {
+                if config.headcrop + config.tailcrop < read_len {
                     let average_quality = ave_qual(record.qual());
-                    if average_quality >= minqual && read_len >= minlen && read_len <= maxlen {
+                    if average_quality >= config.minqual
+                        && read_len >= config.minlen
+                        && read_len <= config.maxlen
+                    {
                         // Check if a description attribute is present, taken from the bio-rust code to format fastq
                         let header = match record.desc() {
                             Some(d) => format!("{} {}", record.id(), d),
@@ -143,10 +132,14 @@ fn filter(
                         println!(
                             "@{}\n{}\n+\n{}",
                             header,
-                            std::str::from_utf8(&record.seq()[headcrop..read_len - tailcrop])
-                                .unwrap(),
-                            std::str::from_utf8(&record.qual()[headcrop..read_len - tailcrop])
-                                .unwrap()
+                            std::str::from_utf8(
+                                &record.seq()[config.headcrop..read_len - config.tailcrop]
+                            )
+                            .unwrap(),
+                            std::str::from_utf8(
+                                &record.qual()[config.headcrop..read_len - config.tailcrop]
+                            )
+                            .unwrap()
                         );
                     }
                 }
