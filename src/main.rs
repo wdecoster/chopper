@@ -31,7 +31,7 @@ impl Config {
         let minlen: usize = matches.value_of("minlength").unwrap().parse().unwrap();
         let maxlen: usize = matches.value_of("maxlength").unwrap().parse().unwrap();
         let headcrop: usize = matches.value_of("headcrop").unwrap().parse().unwrap();
-        let tailcrop: usize = matches.value_of("headcrop").unwrap().parse().unwrap();
+        let tailcrop: usize = matches.value_of("tailcrop").unwrap().parse().unwrap();
         let threads: usize = matches.value_of("threads").unwrap().parse().unwrap();
         Config {
             minqual,
