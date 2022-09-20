@@ -1,110 +1,51 @@
 // based on https://docs.rs/bio/0.32.0/bio/io/fastq/index.html#read-and-write
-
-extern crate bio;
-extern crate clap;
-
 use bio::io::fastq;
-use clap::{App, Arg};
+use clap::AppSettings::DeriveDisplayOrder;
+use clap::Parser;
 use rayon::prelude::*;
 use std::io;
 
-fn main() {
-    let config = get_args();
-    filter(config)
-}
-
-struct Config {
+// The arguments end up in the Cli struct
+#[derive(Parser, Debug)]
+#[structopt(global_settings=&[DeriveDisplayOrder])]
+#[clap(author, version, about="Filtering and trimming of fastq files. Reads on stdin and writes to stdout.", long_about = None)]
+struct Cli {
+    /// Sets a minimum Phred average quality score
+    #[clap(short = 'q', long = "quality", value_parser, default_value_t = 0.0)]
     minqual: f64,
-    minlen: usize,
-    maxlen: usize,
+
+    /// Sets a minimum read length
+    #[clap(short = 'l', long, value_parser, default_value_t = 1)]
+    minlength: usize,
+
+    /// Sets a maximum read length
+    // Default is largest i32. Better would be to explicitly use Inf, but couldn't figure it out.
+    #[clap(long, value_parser, default_value_t = 2147483647)]
+    maxlength: usize,
+
+    /// Trim N nucleotides from the start of a read
+    #[clap(long, value_parser, default_value_t = 0)]
     headcrop: usize,
+
+    /// Trim N nucleotides from the end of a read
+    #[clap(long, value_parser, default_value_t = 0)]
     tailcrop: usize,
+
+    /// Use N parallel threads
+    #[clap(short, long, value_parser, default_value_t = 4)]
     threads: usize,
 }
 
-impl Config {
-    // Create a config object from matches returned by get_args: clap arguments
-    // These values are checked by is_int to be valid integers
-    // and therefore calling unwrap() should be okay.
-    fn new(matches: clap::ArgMatches) -> Config {
-        let minqual: f64 = matches.value_of("quality").unwrap().parse().unwrap();
-        let minlen: usize = matches.value_of("minlength").unwrap().parse().unwrap();
-        let maxlen: usize = matches.value_of("maxlength").unwrap().parse().unwrap();
-        let headcrop: usize = matches.value_of("headcrop").unwrap().parse().unwrap();
-        let tailcrop: usize = matches.value_of("tailcrop").unwrap().parse().unwrap();
-        let threads: usize = matches.value_of("threads").unwrap().parse().unwrap();
-        Config {
-            minqual,
-            minlen,
-            maxlen,
-            headcrop,
-            tailcrop,
-            threads,
-        }
-    }
+fn main() {
+    let args = Cli::parse();
+    filter(args)
 }
 
-fn get_args() -> Config {
-    let matches = App::new("nanofilt")
-                      .version("0.1")
-                      .author("Wouter De Coster")
-                      .about("Filtering and trimming of fastq files. Reads on stdin and writes to stdout.")
-                      .after_help("EXAMPLE:\n\tgunzip -c reads.fastq.gz | nanofilt -q 10 -l 500 | gzip > filtered_reads.fastq.gz")
-                      .arg(Arg::with_name("quality")
-                           .short("q")
-                           .long("quality")
-                           .help("Sets a minimum Phred average quality score")
-                           .takes_value(true)
-                           .default_value("0")
-                           .validator(is_int))
-                       .arg(Arg::with_name("minlength")
-                            .short("l")
-                            .long("minlength")
-                            .help("Sets a minimum read length")
-                            .takes_value(true)
-                            .default_value("1")
-                            .validator(is_int))
-                       .arg(Arg::with_name("maxlength")
-                            .long("maxlength")
-                            .help("Sets a maximum read length")
-                            .takes_value(true)
-                            // Default is largest i32. Better would be to explicitly use Inf, but couldn't figure it out.
-                            .default_value("2147483647")
-                            .validator(is_int))
-                       .arg(Arg::with_name("headcrop")
-                            .long("headcrop")
-                            .help("Trim N nucleotides from the start of a read")
-                            .takes_value(true)
-                            .default_value("0")
-                            .validator(is_int))
-                       .arg(Arg::with_name("tailcrop")
-                            .long("tailcrop")
-                            .help("Trim N nucleotides from the end of a read")
-                            .takes_value(true)
-                            .default_value("0")
-                            .validator(is_int))
-                        .arg(Arg::with_name("threads")
-                             .long("threads")
-                             .help("Use N parallel threads")
-                             .takes_value(true)
-                             .default_value("4")
-                             .validator(is_int))
-                      .get_matches();
-    Config::new(matches)
-}
-
-// Function to check if the supplied (string) argument on the command line are actually integers.
-fn is_int(v: String) -> Result<(), String> {
-    match v.parse::<i32>() {
-        Ok(_i) => Ok(()),
-        Err(_e) => Err(String::from("The value should be a positive integer!")),
-    }
-}
 /// This function filters fastq on stdin based on quality, maxlength and minlength
 /// and applies trimming before writting to stdout
-fn filter(config: Config) {
+fn filter(args: Cli) {
     rayon::ThreadPoolBuilder::new()
-        .num_threads(config.threads)
+        .num_threads(args.threads)
         .build_global()
         .unwrap();
     fastq::Reader::new(io::stdin())
@@ -116,11 +57,11 @@ fn filter(config: Config) {
             if !record.is_empty() {
                 let read_len = record.seq().len();
                 // If a read is shorter than what is to be cropped the read is dropped entirely (filtered out)
-                if config.headcrop + config.tailcrop < read_len {
+                if args.headcrop + args.tailcrop < read_len {
                     let average_quality = ave_qual(record.qual());
-                    if average_quality >= config.minqual
-                        && read_len >= config.minlen
-                        && read_len <= config.maxlen
+                    if average_quality >= args.minqual
+                        && read_len >= args.minlength
+                        && read_len <= args.maxlength
                     {
                         // Check if a description attribute is present, taken from the bio-rust code to format fastq
                         let header = match record.desc() {
@@ -133,11 +74,11 @@ fn filter(config: Config) {
                             "@{}\n{}\n+\n{}",
                             header,
                             std::str::from_utf8(
-                                &record.seq()[config.headcrop..read_len - config.tailcrop]
+                                &record.seq()[args.headcrop..read_len - args.tailcrop]
                             )
                             .unwrap(),
                             std::str::from_utf8(
-                                &record.qual()[config.headcrop..read_len - config.tailcrop]
+                                &record.qual()[args.headcrop..read_len - args.tailcrop]
                             )
                             .unwrap()
                         );

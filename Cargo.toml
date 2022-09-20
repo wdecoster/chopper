@@ -8,6 +8,6 @@ edition = "2018"
 
 [dependencies]
 bio = "*"
-clap = "2.33.3"
+clap = { version = "3.2.6", features = ["derive"] }
 rayon = "*"
 approx = "*"
