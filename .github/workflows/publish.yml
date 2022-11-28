@@ -20,16 +20,16 @@ jobs:
         include:
           - name: linux
             os: ubuntu-latest
-            artifact_name: target/release/cramino
-            asset_name: cramino-linux
+            artifact_name: target/release/chopper
+            asset_name: chopper-linux
 #          - name: windows
 #            os: windows-latest
 #            artifact_name: target/release/<name>.exe
 #            asset_name: <name>-windows
           - name: macos
             os: macos-latest
-            artifact_name: target/release/cramino
-            asset_name: cramino-macos
+            artifact_name: target/release/chopper
+            asset_name: chopper-macos
 
     steps:
     - uses: actions/checkout@v1
