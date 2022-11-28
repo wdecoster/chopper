@@ -4,7 +4,6 @@ Rust implementation of [NanoFilt](https://github.com/wdecoster/nanofilt)+[NanoLy
 Filtering is done on average read quality and minimal or maximal read length, and applying a headcrop (start of read) and tailcrop (end of read) while printing the reads passing the filter.
 
 Compared to the Python implementation the scope is to deliver the same results, almost the same functionality, at much faster execution times. At the moment this tool does not support filtering using a sequencing_summary file or filtering on GC content. If those features are of interest then please reach out.  
-As this is my first rust project I welcome all feedback!
 
 ## Installation
 
@@ -24,6 +23,7 @@ OPTIONS:
     -q, --quality       Sets a minimum Phred average quality score [default: 0]
         --tailcrop      Trim N nucleotides from the end of a read [default: 0]
         --threads       Number of parallel threads to use [default: 4]
+        --contam        Fasta file with reference to check potential contaminants against [default None]
 ```
 
 EXAMPLE:  
