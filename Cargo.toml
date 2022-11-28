@@ -1,5 +1,5 @@
 [package]
-name = "nanofilt"
+name = "chopper"
 version = "0.1.0"
 authors = ["wdecoster <decosterwouter@gmail.com>"]
 edition = "2018"
@@ -11,3 +11,4 @@ bio = "*"
 clap = { version = "3.2.6", features = ["derive"] }
 rayon = "*"
 approx = "*"
+minimap2 = "0.1.8"
