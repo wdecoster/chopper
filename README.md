@@ -12,7 +12,7 @@ As this is my first rust project I welcome all feedback!
 
 Reads on stdin and writes to stdout.
 
-```
+```text
 FLAGS:
     -h, --help       Prints help information
     -V, --version    Prints version information
@@ -27,7 +27,7 @@ OPTIONS:
 ```
 
 EXAMPLE:  
- `gunzip -c reads.fastq.gz | nanofilt -q 10 -l 500 | gzip > filtered_reads.fastq.gz`
+ `gunzip -c reads.fastq.gz | chopper -q 10 -l 500 | gzip > filtered_reads.fastq.gz`
 
 ## Citation
 
