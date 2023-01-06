@@ -147,12 +147,11 @@ fn ave_qual(quals: &[u8]) -> f64 {
 }
 
 fn setup_contamination_filter(contam_fasta: &str) -> Aligner {
-    Aligner {
-        threads: 8,
-        ..map_ont()
-    }
-    .with_index(contam_fasta, None)
-    .expect("Unable to build index")
+    Aligner::builder()
+        .with_threads(8)
+        .map_ont()
+        .with_index(contam_fasta, None)
+        .expect("Unable to build index")
 }
 
 // Checks if a sequence is a contaminant, and returns false if so
