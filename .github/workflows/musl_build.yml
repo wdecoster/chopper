@@ -1,4 +1,25 @@
-name: Rust MUSL Builder
-# You may pin to the exact commit or the version.
-# uses: NSCoder/rust-musl-action@a8aaded66531bd7ba0d25808840701659fc10763
-uses: NSCoder/rust-musl-action@v1.0.0
+name: Static Musl Build
+
+on:
+  push:
+    tags:
+      - '*'
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v2
+      
+    - name: Build static
+      uses:  stevenleadbeater/rust-musl-builder@master
+      with:
+          args: /bin/bash -c "cargo build --release --target=x86_64-unknown-linux-musl"
+  
+    - name: Upload binaries to release
+      uses: actions/upload-artifact@v2
+      with:
+        name: chopper-musl
+        path: target/release/chopper
