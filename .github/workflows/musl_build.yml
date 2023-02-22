@@ -1,0 +1,4 @@
+- name: Rust MUSL Builder
+  # You may pin to the exact commit or the version.
+  # uses: NSCoder/rust-musl-action@a8aaded66531bd7ba0d25808840701659fc10763
+  uses: NSCoder/rust-musl-action@v1.0.0
