@@ -7,6 +7,12 @@ Compared to the Python implementation the scope is to deliver the same results, 
 
 ## Installation
 
+Preferably, for most users, download a ready-to-use binary for your system to add directory on your $PATH from the [releases](https://github.com/wdecoster/chopper/releases).  
+You may have to change the file permissions to execute it with `chmod +x chopper`
+
+Alternatively, use conda to install  
+`conda install -c bioconda chopper`
+
 ## Usage
 
 Reads on stdin and writes to stdout.
