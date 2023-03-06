@@ -11,4 +11,4 @@ bio = "*"
 clap = { version = "3.2.6", features = ["derive"] }
 rayon = "*"
 approx = "*"
-minimap2 = "0.1.9"
+minimap2 = "0.1.10"

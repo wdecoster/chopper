@@ -4,7 +4,6 @@ use clap::AppSettings::DeriveDisplayOrder;
 use clap::Parser;
 use minimap2::*;
 use rayon::prelude::*;
-use std::fs::File;
 use std::io::{self, Read};
 use std::path::PathBuf;
 
@@ -194,7 +193,7 @@ fn test_ave_qual() {
 #[test]
 fn test_filter() {
     filter(
-        &mut File::open("test-data/test.fastq").unwrap(),
+        &mut std::fs::File::open("test-data/test.fastq").unwrap(),
         Cli {
             minlength: 100,
             maxlength: 100000,
@@ -210,7 +209,7 @@ fn test_filter() {
 #[test]
 fn test_contam() {
     let aligner = setup_contamination_filter("test-data/random_contam.fa");
-    let rec = fastq::Reader::new(File::open("test-data/test.fastq").unwrap())
+    let rec = fastq::Reader::new(std::fs::File::open("test-data/test.fastq").unwrap())
         .records()
         .next()
         .unwrap()
@@ -221,7 +220,7 @@ fn test_contam() {
 #[test]
 fn test_no_contam() {
     let aligner = setup_contamination_filter("test-data/random_contam.fa");
-    let rec = fastq::Reader::new(File::open("test-data/other-test.fastq").unwrap())
+    let rec = fastq::Reader::new(std::fs::File::open("test-data/other-test.fastq").unwrap())
         .records()
         .next()
         .unwrap()
@@ -232,7 +231,7 @@ fn test_no_contam() {
 #[test]
 fn test_filter_with_contam() {
     filter(
-        &mut File::open("test-data/test.fastq").unwrap(),
+        &mut std::fs::File::open("test-data/test.fastq").unwrap(),
         Cli {
             minlength: 100,
             maxlength: 100000,
@@ -247,7 +246,7 @@ fn test_filter_with_contam() {
 
 #[test]
 fn test_record_qual_len() {
-    fastq::Reader::new(File::open("test-data/test.fastq").unwrap())
+    fastq::Reader::new(std::fs::File::open("test-data/test.fastq").unwrap())
         .records()
         .into_iter()
         .for_each(|record| {
@@ -266,7 +265,7 @@ fn test_record_qual_len() {
 
 #[test]
 fn test_quals() {
-    let rec = fastq::Reader::new(File::open("test-data/test.fastq").unwrap())
+    let rec = fastq::Reader::new(std::fs::File::open("test-data/test.fastq").unwrap())
         .records()
         .next()
         .unwrap()
