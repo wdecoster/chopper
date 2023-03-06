@@ -16,6 +16,10 @@ struct Cli {
     #[clap(short = 'q', long = "quality", value_parser, default_value_t = 0.0)]
     minqual: f64,
 
+    /// Sets a maximum Phred average quality score
+    #[clap(long, value_parser, default_value_t = 1000.0)]
+    maxqual: f64,
+
     /// Sets a minimum read length
     #[clap(short = 'l', long, value_parser, default_value_t = 1)]
     minlength: usize,
@@ -76,6 +80,7 @@ where
                         if args.headcrop + args.tailcrop < read_len {
                             let average_quality = ave_qual(record.qual());
                             if average_quality >= args.minqual
+                                && average_quality <= args.maxqual
                                 && read_len >= args.minlength
                                 && read_len <= args.maxlength
                                 && !is_contamination(&record.seq(), &aligner)
@@ -106,6 +111,7 @@ where
                                 &record.qual().iter().map(|i| i - 33).collect::<Vec<u8>>(),
                             );
                             if average_quality >= args.minqual
+                                && average_quality <= args.maxqual
                                 && read_len >= args.minlength
                                 && read_len <= args.maxlength
                             {
@@ -198,6 +204,7 @@ fn test_filter() {
             minlength: 100,
             maxlength: 100000,
             minqual: 5.0,
+            maxqual: 200.0,
             headcrop: 10,
             tailcrop: 10,
             threads: 1,
@@ -236,6 +243,7 @@ fn test_filter_with_contam() {
             minlength: 100,
             maxlength: 100000,
             minqual: 5.0,
+            maxqual: 100.0,
             headcrop: 10,
             tailcrop: 10,
             threads: 1,
