@@ -1,25 +1,22 @@
-name: Static Musl Build
-
+name: Rust-static-build
 on:
   push:
     tags:
       - '*'
-
+env:
+  CARGO_TERM_COLOR: always
+  BUILD_TARGET: x86_64-unknown-linux-musl
+  BINARY_NAME: chopper
 jobs:
   build:
-
     runs-on: ubuntu-latest
-
     steps:
     - uses: actions/checkout@v2
-      
-    - name: Build static
-      uses:  stevenleadbeater/rust-musl-builder@master
+    - name: Build-musl
+      uses: gmiam/rust-musl-action@master
       with:
-          args: /bin/bash -c "cargo build --release --target=x86_64-unknown-linux-musl"
-  
-    - name: Upload binaries to release
-      uses: actions/upload-artifact@v2
+        args: cargo build --target $BUILD_TARGET --release
+    - uses: actions/upload-artifact@v2
       with:
-        name: chopper-musl
-        path: target/release/chopper
+        name: ${{ env.BINARY_NAME }}
+        path: target/x86_64-unknown-linux-musl/release/${{ env.BINARY_NAME }}*
