@@ -1,8 +1,8 @@
 // based on https://docs.rs/bio/0.32.0/bio/io/fastq/index.html#read-and-write
-use bio::io::fastq;
 use clap::AppSettings::DeriveDisplayOrder;
 use clap::Parser;
 use minimap2::*;
+use needletail::parse_fastx_stdin;
 use rayon::prelude::*;
 use std::io::{self, Read};
 use std::path::PathBuf;
@@ -57,69 +57,67 @@ fn is_file(pathname: &str) -> Result<(), String> {
 
 fn main() {
     let args = Cli::parse();
-    filter(&mut io::stdin(), args);
+    filter(args);
 }
 
 /// This function filters fastq on stdin based on quality, maxlength and minlength
 /// and applies trimming before writting to stdout
-fn filter<T>(input: &mut T, args: Cli)
+fn filter<T>(args: Cli)
 where
     T: Read + std::marker::Send,
 {
     match args.contam {
         Some(ref fas) => {
             let aligner = setup_contamination_filter(fas);
-            fastq::Reader::new(input)
-                .records()
-                .into_iter()
-                .for_each(|record| {
-                    let record = record.unwrap();
-                    if !record.is_empty() {
-                        let read_len = record.seq().len();
-                        // If a read is shorter than what is to be cropped the read is dropped entirely (filtered out)
-                        if args.headcrop + args.tailcrop < read_len {
-                            let average_quality = ave_qual(record.qual());
-                            if average_quality >= args.minqual
-                                && average_quality <= args.maxqual
-                                && read_len >= args.minlength
-                                && read_len <= args.maxlength
-                                && !is_contamination(&record.seq(), &aligner)
-                            {
-                                write_record(record, &args, read_len);
-                            }
+            let mut reader = parse_fastx_stdin().expect("Invalid path/file");
+            while let Some(record) = reader.next() {
+                let seqrec = record.expect("invalid record");
+                let read_len = seqrec.num_bases();
+                // If a read is shorter than what is to be cropped the read is dropped entirely (filtered out)
+                if args.headcrop + args.tailcrop < read_len {
+                    if let Some(qual) = seqrec.qual() {
+                        let average_quality = ave_qual(qual);
+                        if average_quality >= args.minqual
+                            && average_quality <= args.maxqual
+                            && read_len >= args.minlength
+                            && read_len <= args.maxlength
+                            && !is_contamination(&seqrec.seq(), &aligner)
+                        {
+                            write_record(seqrec, &args, read_len);
                         }
                     }
-                });
+                }
+            }
         }
-
         None => {
             rayon::ThreadPoolBuilder::new()
                 .num_threads(args.threads)
                 .build()
                 .unwrap();
-            fastq::Reader::new(input)
-                .records()
-                .into_iter()
-                .par_bridge()
-                .for_each(|record| {
-                    let record = record.unwrap();
-                    if !record.is_empty() {
-                        let read_len = record.seq().len();
-                        // If a read is shorter than what is to be cropped the read is dropped entirely (filtered out)
-                        if args.headcrop + args.tailcrop < read_len {
-                            let average_quality = ave_qual(
-                                &record.qual().iter().map(|i| i - 33).collect::<Vec<u8>>(),
-                            );
-                            if average_quality >= args.minqual
-                                && average_quality <= args.maxqual
-                                && read_len >= args.minlength
-                                && read_len <= args.maxlength
-                            {
-                                write_record(record, &args, read_len);
-                            }
-                        }
-                    }
-                });
+            // fastq::Reader::new(input)
+            //     .records()
+            //     .into_iter()
+            //     .par_bridge()
+            //     .for_each(|record| {
+            //         let record = record.unwrap();
+            //         if !record.is_empty() {
+            //             let read_len = record.seq().len();
+            //             // If a read is shorter than what is to be cropped the read is dropped entirely (filtered out)
+            //             if args.headcrop + args.tailcrop < read_len {
+            //                 let average_quality = ave_qual(
+            //                     &record.qual().iter().map(|i| i - 33).collect::<Vec<u8>>(),
+            //                 );
+            //                 if average_quality >= args.minqual
+            //                     && average_quality <= args.maxqual
+            //                     && read_len >= args.minlength
+            //                     && read_len <= args.maxlength
+            //                 {
+            //                     write_record(record, &args, read_len);
+            //                 }
+            //             }
+            //         }
+            //     });
+            println!("booo");
         }
     }
 }
