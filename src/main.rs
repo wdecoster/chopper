@@ -79,7 +79,8 @@ where
                     let read_len = record.seq().len();
                     // If a read is shorter than what is to be cropped the read is dropped entirely (filtered out)
                     if args.headcrop + args.tailcrop < read_len {
-                        let average_quality = ave_qual(record.qual());
+                        let average_quality =
+                            ave_qual(&record.qual().iter().map(|i| i - 33).collect::<Vec<u8>>());
                         if average_quality >= args.minqual
                             && average_quality <= args.maxqual
                             && read_len >= args.minlength
