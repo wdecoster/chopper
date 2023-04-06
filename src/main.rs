@@ -1,6 +1,5 @@
 // based on https://docs.rs/bio/0.32.0/bio/io/fastq/index.html#read-and-write
 use bio::io::fastq;
-use clap::AppSettings::DeriveDisplayOrder;
 use clap::Parser;
 use minimap2::*;
 use rayon::prelude::*;
@@ -10,40 +9,39 @@ use std::sync::Mutex;
 
 // The arguments end up in the Cli struct
 #[derive(Parser, Debug)]
-#[structopt(global_settings=&[DeriveDisplayOrder])]
 #[clap(author, version, about="Filtering and trimming of fastq files. Reads on stdin and writes to stdout.", long_about = None)]
 struct Cli {
     /// Sets a minimum Phred average quality score
-    #[clap(short = 'q', long = "quality", value_parser, default_value_t = 0.0)]
+    #[arg(short = 'q', long = "quality", value_parser, default_value_t = 0.0)]
     minqual: f64,
 
     /// Sets a maximum Phred average quality score
-    #[clap(long, value_parser, default_value_t = 1000.0)]
+    #[arg(long, value_parser, default_value_t = 1000.0)]
     maxqual: f64,
 
     /// Sets a minimum read length
-    #[clap(short = 'l', long, value_parser, default_value_t = 1)]
+    #[arg(short = 'l', long, value_parser, default_value_t = 1)]
     minlength: usize,
 
     /// Sets a maximum read length
     // Default is largest i32. Better would be to explicitly use Inf, but couldn't figure it out.
-    #[clap(long, value_parser, default_value_t = 2147483647)]
+    #[arg(long, value_parser, default_value_t = 2147483647)]
     maxlength: usize,
 
     /// Trim N nucleotides from the start of a read
-    #[clap(long, value_parser, default_value_t = 0)]
+    #[arg(long, value_parser, default_value_t = 0)]
     headcrop: usize,
 
     /// Trim N nucleotides from the end of a read
-    #[clap(long, value_parser, default_value_t = 0)]
+    #[arg(long, value_parser, default_value_t = 0)]
     tailcrop: usize,
 
     /// Use N parallel threads
-    #[clap(short, long, value_parser, default_value_t = 4)]
+    #[arg(short, long, value_parser, default_value_t = 4)]
     threads: usize,
 
     /// Filter contaminants against a fasta
-    #[clap(short, long, validator = is_file)]
+    #[arg(short, long, value_parser)]
     contam: Option<String>,
 }
 
@@ -69,6 +67,8 @@ where
 {
     match args.contam {
         Some(ref fas) => {
+            is_file(fas)
+                .unwrap_or_else(|_| panic!("Fasta file for filtering contaminants is invalid",));
             let mut total_reads = 0;
             let mut output_reads = 0;
             let aligner = setup_contamination_filter(fas);
