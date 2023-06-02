@@ -35,6 +35,6 @@ OPTIONS:
 EXAMPLE:  
  `gunzip -c reads.fastq.gz | chopper -q 10 -l 500 | gzip > filtered_reads.fastq.gz`
 
-## Citation
+## CITATION
 
-If you use this tool, please consider citing our [publication](https://academic.oup.com/bioinformatics/article/34/15/2666/4934939).
+If you use this tool, please consider citing our [publication](https://academic.oup.com/bioinformatics/article/39/5/btad311/7160911).
