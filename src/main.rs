@@ -5,7 +5,8 @@ use minimap2::*;
 use rayon::prelude::*;
 use std::io::{self, Read};
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 // The arguments end up in the Cli struct
 #[derive(Parser, Debug)]
@@ -97,19 +98,18 @@ where
         }
 
         None => {
-            let total_reads_ = Mutex::new(0);
-            let output_reads_ = Mutex::new(0);
+            let total_reads_ = Arc::new(AtomicUsize::new(0));
+            let output_reads_ = Arc::new(AtomicUsize::new(0));
             rayon::ThreadPoolBuilder::new()
                 .num_threads(args.threads)
-                .build()
+                .build_global()
                 .unwrap();
             fastq::Reader::new(input)
                 .records()
                 .par_bridge()
                 .for_each(|record| {
                     let record = record.unwrap();
-                    let mut total_reads = total_reads_.lock().unwrap();
-                    *total_reads += 1;
+                    total_reads_.fetch_add(1, Ordering::SeqCst);
                     if !record.is_empty() {
                         let read_len = record.seq().len();
                         // If a read is shorter than what is to be cropped the read is dropped entirely (filtered out)
@@ -123,14 +123,13 @@ where
                                 && read_len <= args.maxlength
                             {
                                 write_record(record, &args, read_len);
-                                let mut output_reads = output_reads_.lock().unwrap();
-                                *output_reads += 1;
+                                output_reads_.fetch_add(1, Ordering::SeqCst);
                             }
                         }
                     }
                 });
-            let output_reads = output_reads_.lock().unwrap();
-            let total_reads = total_reads_.lock().unwrap();
+            let output_reads = output_reads_.load(Ordering::SeqCst);
+            let total_reads = total_reads_.load(Ordering::SeqCst);
             eprintln!("Kept {output_reads} reads out of {total_reads} reads");
         }
     }
