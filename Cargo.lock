@@ -604,9 +604,9 @@ dependencies = [
 
 [[package]]
 name = "minimap2"
-version = "0.1.14+minimap2.2.26"
+version = "0.1.15+minimap2.2.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d28822642d8e3befcd81dbfef1ca6946062101e87ed99aa6c3afc9a0676d3f97"
+checksum = "af90a1190361baf557a7aada5abe3e5944ec4e3be68d1e43540d63213411d813"
 dependencies = [
  "fffx",
  "flate2",
@@ -617,12 +617,11 @@ dependencies = [
 
 [[package]]
 name = "minimap2-sys"
-version = "0.1.14+minimap2.2.26"
+version = "0.1.15+minimap2.2.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e9643c9a368c650956df4151e53c6419cad24e7cc90c70b3616f9669d519ffd"
+checksum = "732bc692162fb9ff77966deeeeeef3167807c070996ce53ebc33b4a813a5109e"
 dependencies = [
  "cc",
- "libc",
  "libz-sys",
  "pkg-config",
 ]
