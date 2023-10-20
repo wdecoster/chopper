@@ -44,6 +44,10 @@ struct Cli {
     /// Filter contaminants against a fasta
     #[arg(short, long, value_parser)]
     contam: Option<String>,
+
+    /// Output the opposite of the normal results
+    #[arg(long)]
+    inverse: bool,
 }
 
 fn is_file(pathname: &str) -> Result<(), String> {
@@ -82,11 +86,16 @@ where
                     if args.headcrop + args.tailcrop < read_len {
                         let average_quality =
                             ave_qual(&record.qual().iter().map(|i| i - 33).collect::<Vec<u8>>());
-                        if average_quality >= args.minqual
+                        if (!args.inverse && average_quality >= args.minqual
                             && average_quality <= args.maxqual
                             && read_len >= args.minlength
                             && read_len <= args.maxlength
-                            && !is_contamination(&record.seq(), &aligner)
+                            && !is_contamination(&record.seq(), &aligner))
+                            || (args.inverse && (average_quality < args.minqual
+                                || average_quality > args.maxqual
+                                || read_len < args.minlength
+                                || read_len > args.maxlength
+                                || is_contamination(&record.seq(), &aligner)))
                         {
                             write_record(record, &args, read_len);
                             output_reads += 1;
@@ -117,10 +126,14 @@ where
                             let average_quality = ave_qual(
                                 &record.qual().iter().map(|i| i - 33).collect::<Vec<u8>>(),
                             );
-                            if average_quality >= args.minqual
+                            if (!args.inverse && average_quality >= args.minqual
                                 && average_quality <= args.maxqual
                                 && read_len >= args.minlength
-                                && read_len <= args.maxlength
+                                && read_len <= args.maxlength)
+                                || (args.inverse && (average_quality < args.minqual
+                                    || average_quality > args.maxqual
+                                    || read_len < args.minlength
+                                    || read_len > args.maxlength))
                             {
                                 write_record(record, &args, read_len);
                                 output_reads_.fetch_add(1, Ordering::SeqCst);
@@ -220,6 +233,7 @@ fn test_filter() {
             tailcrop: 10,
             threads: 1,
             contam: None,
+            inverse: false,
         },
     );
 }
@@ -259,6 +273,7 @@ fn test_filter_with_contam() {
             tailcrop: 10,
             threads: 1,
             contam: Some("test-data/random_contam.fa".to_owned()),
+            inverse: false,
         },
     );
 }
