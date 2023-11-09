@@ -165,12 +165,13 @@ fn ave_qual(quals: &[u8]) -> f64 {
 fn setup_contamination_filter(contam_fasta: &str) -> Aligner {
     Aligner::builder()
         .with_threads(8)
+        .with_cigar()
         .map_ont()
         .with_index(contam_fasta, None)
         .expect("Unable to build index")
 }
 
-// Checks if a sequence is a contaminant, and returns false if so
+// Checks if a sequence is a contaminant, and returns true if so
 // A sequence is considered a contaminant if there is an alignment of at least 90% between query and  target
 fn is_contamination(readseq: &&[u8], contam: &Aligner) -> bool {
     let alignment = contam
