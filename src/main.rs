@@ -78,7 +78,7 @@ where
             let mut output_reads = 0;
             let aligner = setup_contamination_filter(fas);
             fastq::Reader::new(input).records().for_each(|record| {
-                let record = record.unwrap();
+                let record = record.expect("ERROR: problem parsing fastq record");
                 total_reads += 1;
                 if !record.is_empty() {
                     let read_len = record.seq().len();
@@ -86,16 +86,18 @@ where
                     if args.headcrop + args.tailcrop < read_len {
                         let average_quality =
                             ave_qual(&record.qual().iter().map(|i| i - 33).collect::<Vec<u8>>());
-                        if (!args.inverse && average_quality >= args.minqual
+                        if (!args.inverse
+                            && average_quality >= args.minqual
                             && average_quality <= args.maxqual
                             && read_len >= args.minlength
                             && read_len <= args.maxlength
                             && !is_contamination(&record.seq(), &aligner))
-                            || (args.inverse && (average_quality < args.minqual
-                                || average_quality > args.maxqual
-                                || read_len < args.minlength
-                                || read_len > args.maxlength
-                                || is_contamination(&record.seq(), &aligner)))
+                            || (args.inverse
+                                && (average_quality < args.minqual
+                                    || average_quality > args.maxqual
+                                    || read_len < args.minlength
+                                    || read_len > args.maxlength
+                                    || is_contamination(&record.seq(), &aligner)))
                         {
                             write_record(record, &args, read_len);
                             output_reads += 1;
@@ -112,12 +114,12 @@ where
             rayon::ThreadPoolBuilder::new()
                 .num_threads(args.threads)
                 .build_global()
-                .unwrap();
+                .expect("Error: Unable to build threadpool");
             fastq::Reader::new(input)
                 .records()
                 .par_bridge()
                 .for_each(|record| {
-                    let record = record.unwrap();
+                    let record = record.expect("ERROR: problem parsing fastq record");
                     total_reads_.fetch_add(1, Ordering::SeqCst);
                     if !record.is_empty() {
                         let read_len = record.seq().len();
@@ -126,14 +128,16 @@ where
                             let average_quality = ave_qual(
                                 &record.qual().iter().map(|i| i - 33).collect::<Vec<u8>>(),
                             );
-                            if (!args.inverse && average_quality >= args.minqual
+                            if (!args.inverse
+                                && average_quality >= args.minqual
                                 && average_quality <= args.maxqual
                                 && read_len >= args.minlength
                                 && read_len <= args.maxlength)
-                                || (args.inverse && (average_quality < args.minqual
-                                    || average_quality > args.maxqual
-                                    || read_len < args.minlength
-                                    || read_len > args.maxlength))
+                                || (args.inverse
+                                    && (average_quality < args.minqual
+                                        || average_quality > args.maxqual
+                                        || read_len < args.minlength
+                                        || read_len > args.maxlength))
                             {
                                 write_record(record, &args, read_len);
                                 output_reads_.fetch_add(1, Ordering::SeqCst);
@@ -159,8 +163,10 @@ fn write_record(record: fastq::Record, args: &Cli, read_len: usize) {
     println!(
         "@{}\n{}\n+\n{}",
         header,
-        std::str::from_utf8(&record.seq()[args.headcrop..read_len - args.tailcrop]).unwrap(),
-        std::str::from_utf8(&record.qual()[args.headcrop..read_len - args.tailcrop]).unwrap()
+        std::str::from_utf8(&record.seq()[args.headcrop..read_len - args.tailcrop])
+            .expect("ERROR: problem writing fastq seq"),
+        std::str::from_utf8(&record.qual()[args.headcrop..read_len - args.tailcrop])
+            .expect("ERROR: problem writing fastq qual")
     );
 }
 
