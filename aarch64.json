@@ -1,0 +1,17 @@
+{
+    "arch": "aarch64",
+    "data-layout": "e-m:e-i64:64-i128:128-n32:64-S128",
+    "dynamic-linking": false,
+    "executables": true,
+    "has-elf-tls": false,
+    "has-rpath": false,
+    "is-builtin": false,
+    "linker": "aarch64-linux-gnu-gcc",
+    "linker-flavor": "gcc",
+    "llvm-target": "aarch64-MK1C",
+    "os": "linux",
+    "target-endian": "little",
+    "target-pointer-width": "64",
+    "vendor": ""
+}
+
