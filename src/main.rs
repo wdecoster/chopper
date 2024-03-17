@@ -259,7 +259,8 @@ fn test_filter() {
 
 #[test]
 fn test_contam() {
-    let aligner = setup_contamination_filter("test-data/random_contam.fa");
+    let t: usize = 8;
+    let aligner = setup_contamination_filter("test-data/random_contam.fa", &t);
     let rec = fastq::Reader::new(std::fs::File::open("test-data/test.fastq").unwrap())
         .records()
         .next()
@@ -270,7 +271,8 @@ fn test_contam() {
 
 #[test]
 fn test_no_contam() {
-    let aligner = setup_contamination_filter("test-data/random_contam.fa");
+    let t: usize = 8;
+    let aligner = setup_contamination_filter("test-data/random_contam.fa", &t);
     let rec = fastq::Reader::new(std::fs::File::open("test-data/other-test.fastq").unwrap())
         .records()
         .next()
