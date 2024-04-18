@@ -50,7 +50,7 @@ struct Cli {
     #[arg(long)]
     inverse: bool,
 
-    /// Input file if the user does not use stdin
+    /// Input filename [default: read from stdin]
     #[arg(short = 'i', long = "input", value_parser)]
     input: Option<String>,
 }
