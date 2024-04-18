@@ -271,7 +271,8 @@ fn test_filter() {
             threads: 1,
             contam: None,
             inverse: false,
-        },
+            input: None,
+	},
     );
 }
 
@@ -313,6 +314,7 @@ fn test_filter_with_contam() {
             threads: 1,
             contam: Some("test-data/random_contam.fa".to_owned()),
             inverse: false,
+	    input: None,
         },
     );
 }
