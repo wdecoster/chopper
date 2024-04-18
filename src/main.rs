@@ -4,10 +4,11 @@ use clap::Parser;
 use minimap2::*;
 use rayon::prelude::*;
 use std::io::{self, Read};
-use std::path::PathBuf;
+use std::path::{PathBuf, Path};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::fs::File;
+use flate2::read::GzDecoder;
 
 // The arguments end up in the Cli struct
 #[derive(Parser, Debug)]
@@ -65,6 +66,7 @@ fn is_file(pathname: &str) -> Result<(), String> {
     }
 }
 
+
 fn main() {
     let args = Cli::parse();
     rayon::ThreadPoolBuilder::new()
@@ -73,11 +75,22 @@ fn main() {
         .expect("Error: Unable to build threadpool");
 
 	match args.input {
-		/// Process file if --input exist
-		Some(ref infas) => {
-        	let mut input_file = File::open(infas).unwrap();
-			
-        	filter(&mut input_file, args);
+		// Process file if --input exist
+		Some(ref infile) => {
+			let path = Path::new(infile);
+			if path.extension().and_then(|s| s.to_str()) == Some("gz") {
+        		// deal with gz compressed file
+				let gzfile = File::open(&path).unwrap();
+				let mut decoder = GzDecoder::new(gzfile);
+
+    			filter(&mut decoder, args);
+        	
+			}
+			else {
+				// deal with uncompressed fastq file
+				let mut input_file = File::open(infile).unwrap();  
+				filter(&mut input_file, args);
+			}
 		}
 
     		None => {
