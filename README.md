@@ -33,10 +33,12 @@ OPTIONS:
     -i, --input         Input filename [default: read from stdin]
 ```
 
-EXAMPLE:  
- `gunzip -c reads.fastq.gz | chopper -q 10 -l 500 | gzip > filtered_reads.fastq.gz`<br>
- `chopper -q 10 -l 500 -i reads.fastq > filtered_reads.fastq`<br>
- `chopper -q 10 -l 500 -i reads.fastq.gz | gzip > filtered_reads.fastfq.gz`<br>
+EXAMPLES:
+```bash
+gunzip -c reads.fastq.gz | chopper -q 10 -l 500 | gzip > filtered_reads.fastq.gz
+chopper -q 10 -l 500 -i reads.fastq > filtered_reads.fastq
+chopper -q 10 -l 500 -i reads.fastq.gz | gzip > filtered_reads.fastfq.gz
+```
 
 ## CITATION
 
