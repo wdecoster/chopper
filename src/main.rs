@@ -7,6 +7,7 @@ use std::io::{self, Read};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::fs::File;
 
 // The arguments end up in the Cli struct
 #[derive(Parser, Debug)]
@@ -48,7 +49,12 @@ struct Cli {
     /// Output the opposite of the normal results
     #[arg(long)]
     inverse: bool,
+
+	/// Input file if the user does not use stdin
+    #[arg(short = 'i', long = "input", value_parser)]
+    input: Option<String>,
 }
+
 
 fn is_file(pathname: &str) -> Result<(), String> {
     let path = PathBuf::from(pathname);
@@ -66,7 +72,18 @@ fn main() {
         .build_global()
         .expect("Error: Unable to build threadpool");
 
-    filter(&mut io::stdin(), args);
+	match args.input {
+		Some(ref infas) => {
+        	let mut input_file = File::open(infas).unwrap();
+			
+        	filter(&mut input_file, args);
+		}
+
+    	None => {
+    		filter(&mut io::stdin(), args);
+		}
+
+	}
 }
 
 /// This function filters fastq on stdin based on quality, maxlength and minlength
