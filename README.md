@@ -30,7 +30,7 @@ OPTIONS:
         --tailcrop      Trim N nucleotides from the end of a read [default: 0]
         --threads       Number of parallel threads to use [default: 4]
         --contam        Fasta file with reference to check potential contaminants against [default None]
-    -i, --input         Input filename if you do not what to use stdin
+    -i, --input         Input filename [default: read from stdin]
 ```
 
 EXAMPLE:  
