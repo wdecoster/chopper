@@ -50,7 +50,7 @@ struct Cli {
     #[arg(long)]
     inverse: bool,
 
-	/// Input file if the user does not use stdin
+    /// Input file if the user does not use stdin
     #[arg(short = 'i', long = "input", value_parser)]
     input: Option<String>,
 }
@@ -73,13 +73,14 @@ fn main() {
         .expect("Error: Unable to build threadpool");
 
 	match args.input {
+		/// Process file if --input exist
 		Some(ref infas) => {
         	let mut input_file = File::open(infas).unwrap();
 			
         	filter(&mut input_file, args);
 		}
 
-    	None => {
+    		None => {
     		filter(&mut io::stdin(), args);
 		}
 
