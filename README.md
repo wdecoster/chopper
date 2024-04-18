@@ -30,10 +30,15 @@ OPTIONS:
         --tailcrop      Trim N nucleotides from the end of a read [default: 0]
         --threads       Number of parallel threads to use [default: 4]
         --contam        Fasta file with reference to check potential contaminants against [default None]
+    -i, --input         Input filename [default: read from stdin]
 ```
 
-EXAMPLE:  
- `gunzip -c reads.fastq.gz | chopper -q 10 -l 500 | gzip > filtered_reads.fastq.gz`
+EXAMPLES:
+```bash
+gunzip -c reads.fastq.gz | chopper -q 10 -l 500 | gzip > filtered_reads.fastq.gz
+chopper -q 10 -l 500 -i reads.fastq > filtered_reads.fastq
+chopper -q 10 -l 500 -i reads.fastq.gz | gzip > filtered_reads.fastfq.gz
+```
 
 ## CITATION
 

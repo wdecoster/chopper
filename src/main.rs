@@ -4,9 +4,11 @@ use clap::Parser;
 use minimap2::*;
 use rayon::prelude::*;
 use std::io::{self, Read};
-use std::path::PathBuf;
+use std::path::{PathBuf, Path};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::fs::File;
+use flate2::read::GzDecoder;
 
 // The arguments end up in the Cli struct
 #[derive(Parser, Debug)]
@@ -48,7 +50,12 @@ struct Cli {
     /// Output the opposite of the normal results
     #[arg(long)]
     inverse: bool,
+
+    /// Input filename [default: read from stdin]
+    #[arg(short = 'i', long = "input", value_parser)]
+    input: Option<String>,
 }
+
 
 fn is_file(pathname: &str) -> Result<(), String> {
     let path = PathBuf::from(pathname);
@@ -59,6 +66,7 @@ fn is_file(pathname: &str) -> Result<(), String> {
     }
 }
 
+
 fn main() {
     let args = Cli::parse();
     rayon::ThreadPoolBuilder::new()
@@ -66,7 +74,29 @@ fn main() {
         .build_global()
         .expect("Error: Unable to build threadpool");
 
-    filter(&mut io::stdin(), args);
+	match args.input {
+		// Process file if --input exist
+		Some(ref infile) => {
+			let path = Path::new(infile);
+			if path.extension().and_then(|s| s.to_str()) == Some("gz") {
+        			// deal with gz compressed file
+				let gzfile = File::open(&path).unwrap();
+				let mut decoder = GzDecoder::new(gzfile);
+    				filter(&mut decoder, args);
+        	
+			}
+			else {
+				// deal with uncompressed fastq file
+				let mut input_file = File::open(infile).unwrap();  
+				filter(&mut input_file, args);
+			}
+		}
+
+    		None => {
+    		filter(&mut io::stdin(), args);
+		}
+
+	}
 }
 
 /// This function filters fastq on stdin based on quality, maxlength and minlength
@@ -253,7 +283,8 @@ fn test_filter() {
             threads: 1,
             contam: None,
             inverse: false,
-        },
+            input: None,
+	},
     );
 }
 
@@ -295,6 +326,7 @@ fn test_filter_with_contam() {
             threads: 1,
             contam: Some("test-data/random_contam.fa".to_owned()),
             inverse: false,
+	    input: None,
         },
     );
 }
