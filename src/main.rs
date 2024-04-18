@@ -79,11 +79,10 @@ fn main() {
 		Some(ref infile) => {
 			let path = Path::new(infile);
 			if path.extension().and_then(|s| s.to_str()) == Some("gz") {
-        		// deal with gz compressed file
+        			// deal with gz compressed file
 				let gzfile = File::open(&path).unwrap();
 				let mut decoder = GzDecoder::new(gzfile);
-
-    			filter(&mut decoder, args);
+    				filter(&mut decoder, args);
         	
 			}
 			else {
