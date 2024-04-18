@@ -34,8 +34,9 @@ OPTIONS:
 ```
 
 EXAMPLE:  
- `gunzip -c reads.fastq.gz | chopper -q 10 -l 500 | gzip > filtered_reads.fastq.gz`
- `chopper -q 10 -l 500 -i reads.fastq > filtered_reads.fastq`
+ `gunzip -c reads.fastq.gz | chopper -q 10 -l 500 | gzip > filtered_reads.fastq.gz`<br>
+ `chopper -q 10 -l 500 -i reads.fastq > filtered_reads.fastq`<br>
+ `chopper -q 10 -l 500 -i reads.fastq.gz | gzip > filtered_reads.fastfq.gz`<br>
 
 ## CITATION
 
