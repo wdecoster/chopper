@@ -78,16 +78,21 @@ fn main() {
 		// Process file if --input exist
 		Some(ref infile) => {
 			let path = Path::new(infile);
+            // make sure the input file is valid, if not shut down gracefully with an error message
+            if !path.exists() {
+                eprintln!("ERROR: Input file {} does not exist", infile);
+                std::process::exit(1);
+            }
 			if path.extension().and_then(|s| s.to_str()) == Some("gz") {
-        			// deal with gz compressed file
-				let gzfile = File::open(&path).unwrap();
+        		// deal with gz compressed file
+				let gzfile = File::open(&path).expect("Error: Unable to open gzipped file");
 				let mut decoder = GzDecoder::new(gzfile);
     				filter(&mut decoder, args);
         	
 			}
 			else {
 				// deal with uncompressed fastq file
-				let mut input_file = File::open(infile).unwrap();  
+				let mut input_file = File::open(infile).expect("Error: Unable to open fastq file");  
 				filter(&mut input_file, args);
 			}
 		}
@@ -226,7 +231,7 @@ fn ave_qual(quals: &[u8]) -> f64 {
 fn setup_contamination_filter(contam_fasta: &str, threads: &usize) -> Aligner {
     Aligner::builder()
         .preset(Preset::LrHq)
-        .with_threads(*threads)
+        .with_index_threads(*threads)
         .with_cigar()
         .with_index(contam_fasta, None)
         .expect("Unable to build index")
