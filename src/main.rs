@@ -54,6 +54,13 @@ struct Cli {
     /// Input filename [default: read from stdin]
     #[arg(short = 'i', long = "input", value_parser)]
     input: Option<String>,
+
+    /// Filter GC content [default : 0]
+    #[arg(long, value_parser, default_value_t = 1.0)]
+    maxgc : f64,
+
+    #[arg(long, value_parser, default_value_t = 0.0)]
+    mingc : f64,
 }
 
 
@@ -128,6 +135,7 @@ where
                     if !record.is_empty() {
                         let read_len = record.seq().len();
                         // If a read is shorter than what is to be cropped the read is dropped entirely (filtered out)
+                        let read_gc = cal_gc(record.seq());
                         if args.headcrop + args.tailcrop < read_len {
                             let average_quality = ave_qual(
                                 &record.qual().iter().map(|i| i - 33).collect::<Vec<u8>>(),
@@ -135,6 +143,8 @@ where
                             if (!args.inverse
                                 && average_quality >= args.minqual
                                 && average_quality <= args.maxqual
+                                && read_gc >= args.mingc
+                                && read_gc <= args.maxgc
                                 && read_len >= args.minlength
                                 && read_len <= args.maxlength
                                 && !is_contamination(&record.seq(), &aligner))
@@ -170,6 +180,7 @@ where
                     if !record.is_empty() {
                         let read_len = record.seq().len();
                         // If a read is shorter than what is to be cropped the read is dropped entirely (filtered out)
+                        let read_gc = cal_gc(record.seq());
                         if args.headcrop + args.tailcrop < read_len {
                             let average_quality = ave_qual(
                                 &record.qual().iter().map(|i| i - 33).collect::<Vec<u8>>(),
@@ -177,6 +188,8 @@ where
                             if (!args.inverse
                                 && average_quality >= args.minqual
                                 && average_quality <= args.maxqual
+                                && read_gc >= args.mingc
+                                && read_gc <= args.maxgc
                                 && read_len >= args.minlength
                                 && read_len <= args.maxlength)
                                 || (args.inverse
@@ -253,6 +266,28 @@ fn is_contamination(readseq: &&[u8], contam: &Aligner) -> bool {
     }
 }
 
+fn cal_gc(readseq: &[u8]) -> f64 {
+    let mut gc_count = 0;
+    let mut total_bases = 0;
+
+    for &base in readseq {
+        match base {
+            b'G' | b'g' | b'C' | b'c' => gc_count += 1,
+            _ => {}, // Ignore non-GC bases
+        }
+        total_bases += 1;
+    }
+
+    // Return 0 if sequence is empty
+    if total_bases == 0 {
+        return 0.0; 
+    }
+
+    let gc_content = (gc_count as f64) / (total_bases as f64);
+    // Return GC content as absolute value
+    gc_content 
+}
+
 #[test]
 fn test_ave_qual() {
     assert_eq!(ave_qual(&[10]), 10.0);
@@ -289,6 +324,8 @@ fn test_filter() {
             contam: None,
             inverse: false,
             input: None,
+            mingc: 0,
+            maxgc: 1,
 	},
     );
 }
@@ -331,7 +368,9 @@ fn test_filter_with_contam() {
             threads: 1,
             contam: Some("test-data/random_contam.fa".to_owned()),
             inverse: false,
-	    input: None,
+	        input: None,
+            mingc: 0.0,
+            maxgc: 1.0,
         },
     );
 }
