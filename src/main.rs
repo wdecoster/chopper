@@ -138,10 +138,11 @@ where
                         // If a read is shorter than what is to be cropped the read is dropped entirely (filtered out)
                         
                         // Check if gc content filter exist, if no gc content filter is set pass the 0.5 to pass all the follwoing filter
-                        let mut read_gc: f64 = 0.5;
-                        if args.mingc != 0.0 || args.maxgc != 1.0 {
-                            read_gc = cal_gc(record.seq());
-                        }
+                        let read_gc = if args.mingc != 0.0 || args.maxgc != 1.0 {
+                            cal_gc(record.seq())
+                        } else {
+                            0.5
+                        };
                         
                         if args.headcrop + args.tailcrop < read_len {
                             let average_quality = ave_qual(
@@ -189,10 +190,11 @@ where
                         // If a read is shorter than what is to be cropped the read is dropped entirely (filtered out)
 
                         // Check if gc content filter exist, if no gc content filter is set pass the 0.5 to pass all the follwoing filter
-                        let mut read_gc: f64 = 0.5;
-                        if args.mingc != 0.0 || args.maxgc != 1.0 {
-                            read_gc = cal_gc(record.seq());
-                        }
+                        let read_gc = if args.mingc != 0.0 || args.maxgc != 1.0 {
+                            cal_gc(record.seq())
+                        } else {
+                            0.5
+                        };
                         
                         if args.headcrop + args.tailcrop < read_len {
                             let average_quality = ave_qual(
@@ -280,19 +282,8 @@ fn is_contamination(readseq: &&[u8], contam: &Aligner) -> bool {
 }
 
 fn cal_gc(readseq: &[u8]) -> f64 {
-    let mut gc_count = 0;
-
-    for &base in readseq {
-        match base {
-            b'G' | b'g' | b'C' | b'c' => gc_count += 1,
-            _ => {}, // Ignore non-GC bases
-        }
-
-    }
-
-    let gc_content = (gc_count as f64) / (readseq.len() as f64);
-    // Return GC content as absolute value
-    gc_content 
+    let gc_count = readseq.iter().filter(|&&base| base == b'G' || base == b'g' || base == b'C' || base == b'c').count();
+    (gc_count as f64) / (readseq.len() as f64)
 }
 
 #[test]
