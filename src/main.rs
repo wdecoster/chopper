@@ -3,7 +3,7 @@ use bio::io::fastq;
 use clap::Parser;
 use minimap2::*;
 use rayon::prelude::*;
-use std::io::{self, Read};
+use std::io::{self, Read, BufReader};
 use std::path::{PathBuf, Path};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -94,8 +94,9 @@ fn main() {
 			if path.extension().and_then(|s| s.to_str()) == Some("gz") {
         		// deal with gz compressed file
 				let gzfile = File::open(&path).expect("Error: Unable to open gzipped file");
-				let mut decoder = GzDecoder::new(gzfile);
-    				filter(&mut decoder, args);
+                let buf_reader = BufReader::with_capacity(512*1024, gzfile);
+				let mut decoder = GzDecoder::new(buf_reader);
+    			filter(&mut decoder, args);
         	
 			}
 			else {
