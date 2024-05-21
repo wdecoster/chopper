@@ -3,12 +3,14 @@ use bio::io::fastq;
 use clap::Parser;
 use minimap2::*;
 use rayon::prelude::*;
-use std::io::{self, Read, BufReader};
-use std::path::{PathBuf, Path};
+use std::error::Error;
+use std::io::Read;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::fs::File;
-use flate2::read::GzDecoder;
+
+mod utils;
+use utils::file_reader;
 
 // The arguments end up in the Cli struct
 #[derive(Parser, Debug)]
@@ -64,7 +66,6 @@ struct Cli {
     mingc: f64,
 }
 
-
 fn is_file(pathname: &str) -> Result<(), String> {
     let path = PathBuf::from(pathname);
     if path.is_file() {
@@ -74,43 +75,17 @@ fn is_file(pathname: &str) -> Result<(), String> {
     }
 }
 
-
-fn main() {
+fn main() -> Result<(), Box<dyn Error>> {
     let args = Cli::parse();
     rayon::ThreadPoolBuilder::new()
         .num_threads(args.threads)
         .build_global()
         .expect("Error: Unable to build threadpool");
 
-	match args.input {
-		// Process file if --input exist
-		Some(ref infile) => {
-			let path = Path::new(infile);
-            // make sure the input file is valid, if not shut down gracefully with an error message
-            if !path.exists() {
-                eprintln!("ERROR: Input file {} does not exist", infile);
-                std::process::exit(1);
-            }
-			if path.extension().and_then(|s| s.to_str()) == Some("gz") {
-        		// deal with gz compressed file
-				let gzfile = File::open(&path).expect("Error: Unable to open gzipped file");
-                let buf_reader = BufReader::with_capacity(512*1024, gzfile);
-				let mut decoder = GzDecoder::new(buf_reader);
-    			filter(&mut decoder, args);
-        	
-			}
-			else {
-				// deal with uncompressed fastq file
-				let mut input_file = File::open(infile).expect("Error: Unable to open fastq file");  
-				filter(&mut input_file, args);
-			}
-		}
+    let mut reader = file_reader(args.input.as_ref())?;
+    filter(&mut reader, args);
 
-    		None => {
-    		filter(&mut io::stdin(), args);
-		}
-
-	}
+    Ok(())
 }
 
 /// This function filters fastq on stdin based on quality, maxlength and minlength
@@ -137,14 +112,14 @@ where
                     if !record.is_empty() {
                         let read_len = record.seq().len();
                         // If a read is shorter than what is to be cropped the read is dropped entirely (filtered out)
-                        
+
                         // Check if gc content filter exist, if no gc content filter is set pass the 0.5 to pass all the follwoing filter
                         let read_gc = if args.mingc != 0.0 || args.maxgc != 1.0 {
                             cal_gc(record.seq())
                         } else {
                             0.5
                         };
-                        
+
                         if args.headcrop + args.tailcrop < read_len {
                             let average_quality = ave_qual(
                                 &record.qual().iter().map(|i| i - 33).collect::<Vec<u8>>(),
@@ -196,7 +171,7 @@ where
                         } else {
                             0.5
                         };
-                        
+
                         if args.headcrop + args.tailcrop < read_len {
                             let average_quality = ave_qual(
                                 &record.qual().iter().map(|i| i - 33).collect::<Vec<u8>>(),
@@ -283,7 +258,10 @@ fn is_contamination(readseq: &&[u8], contam: &Aligner) -> bool {
 }
 
 fn cal_gc(readseq: &[u8]) -> f64 {
-    let gc_count = readseq.iter().filter(|&&base| base == b'G' || base == b'g' || base == b'C' || base == b'c').count();
+    let gc_count = readseq
+        .iter()
+        .filter(|&&base| base == b'G' || base == b'g' || base == b'C' || base == b'c')
+        .count();
     (gc_count as f64) / (readseq.len() as f64)
 }
 
@@ -325,7 +303,7 @@ fn test_filter() {
             input: None,
             mingc: 0.0,
             maxgc: 1.0,
-	},
+        },
     );
 }
 
@@ -367,7 +345,7 @@ fn test_filter_with_contam() {
             threads: 1,
             contam: Some("test-data/random_contam.fa".to_owned()),
             inverse: false,
-	        input: None,
+            input: None,
             mingc: 0.0,
             maxgc: 1.0,
         },
