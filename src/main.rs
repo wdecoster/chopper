@@ -3,8 +3,8 @@ use bio::io::fastq;
 use clap::Parser;
 use minimap2::*;
 use rayon::prelude::*;
-use std::io::Read;
 use std::error::Error;
+use std::io::Read;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -66,7 +66,6 @@ struct Cli {
     mingc: f64,
 }
 
-
 fn is_file(pathname: &str) -> Result<(), String> {
     let path = PathBuf::from(pathname);
     if path.is_file() {
@@ -76,8 +75,7 @@ fn is_file(pathname: &str) -> Result<(), String> {
     }
 }
 
-
-fn main() -> Result<(), Box<dyn Error>>{
+fn main() -> Result<(), Box<dyn Error>> {
     let args = Cli::parse();
     rayon::ThreadPoolBuilder::new()
         .num_threads(args.threads)
@@ -114,14 +112,14 @@ where
                     if !record.is_empty() {
                         let read_len = record.seq().len();
                         // If a read is shorter than what is to be cropped the read is dropped entirely (filtered out)
-                        
+
                         // Check if gc content filter exist, if no gc content filter is set pass the 0.5 to pass all the follwoing filter
                         let read_gc = if args.mingc != 0.0 || args.maxgc != 1.0 {
                             cal_gc(record.seq())
                         } else {
                             0.5
                         };
-                        
+
                         if args.headcrop + args.tailcrop < read_len {
                             let average_quality = ave_qual(
                                 &record.qual().iter().map(|i| i - 33).collect::<Vec<u8>>(),
@@ -173,7 +171,7 @@ where
                         } else {
                             0.5
                         };
-                        
+
                         if args.headcrop + args.tailcrop < read_len {
                             let average_quality = ave_qual(
                                 &record.qual().iter().map(|i| i - 33).collect::<Vec<u8>>(),
@@ -260,7 +258,10 @@ fn is_contamination(readseq: &&[u8], contam: &Aligner) -> bool {
 }
 
 fn cal_gc(readseq: &[u8]) -> f64 {
-    let gc_count = readseq.iter().filter(|&&base| base == b'G' || base == b'g' || base == b'C' || base == b'c').count();
+    let gc_count = readseq
+        .iter()
+        .filter(|&&base| base == b'G' || base == b'g' || base == b'C' || base == b'c')
+        .count();
     (gc_count as f64) / (readseq.len() as f64)
 }
 
@@ -302,7 +303,7 @@ fn test_filter() {
             input: None,
             mingc: 0.0,
             maxgc: 1.0,
-	},
+        },
     );
 }
 
@@ -344,7 +345,7 @@ fn test_filter_with_contam() {
             threads: 1,
             contam: Some("test-data/random_contam.fa".to_owned()),
             inverse: false,
-	        input: None,
+            input: None,
             mingc: 0.0,
             maxgc: 1.0,
         },
