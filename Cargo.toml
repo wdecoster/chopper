@@ -1,18 +1,20 @@
 [package]
 name = "chopper"
-version = "0.8.0"
+version = "0.9.0"
 authors = ["wdecoster <decosterwouter@gmail.com>"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-bio = "1.3.1"
-clap = { version = "4.2.1", features = ["derive"] }
+bio = "2.0.1"
+clap = { version = "4.5.16", features = ["derive"] }
 rayon = "1.7.0"
 approx = "0.5.1"
-minimap2 = "0.1.17+minimap2.2.27"
-flate2 = { version = "1.0.17", features = ["zlib-ng"], default-features = false }
+minimap2 = "0.1.20"
+flate2 = { version = "1.0.31", features = [
+    "zlib-ng",
+], default-features = false }
 xz2 = "0.1.7"
 bzip2 = "0.4.4"
 atty = "0.2.14"
