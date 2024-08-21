@@ -43,8 +43,6 @@ chopper -q 10 -l 500 -i reads.fastq > filtered_reads.fastq
 chopper -q 10 -l 500 -i reads.fastq.gz | gzip > filtered_reads.fastq.gz
 ```
 
-Note that the tool may be substantially slower in the third example above, and piping while decompressing is recommended (as in the first example). 
-
 ## CITATION
 
 If you use this tool, please consider citing our [publication](https://academic.oup.com/bioinformatics/article/39/5/btad311/7160911).
