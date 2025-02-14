@@ -1,4 +1,3 @@
-// based on https://docs.rs/bio/0.32.0/bio/io/fastq/index.html#read-and-write
 use bio::io::fastq;
 use clap::Parser;
 use minimap2::*;
@@ -232,20 +231,20 @@ fn ave_qual(quals: &[u8]) -> f64 {
     (probability_sum / quals.len() as f64).log10() * -10.0
 }
 
-fn setup_contamination_filter(contam_fasta: &str, threads: &usize) -> Aligner {
-    Aligner::builder()
+fn setup_contamination_filter(contam_fasta: &str, threads: &usize) -> Arc<Aligner<Built>> {
+    Arc::new(Aligner::builder()
         .preset(Preset::LrHq)
         .with_index_threads(*threads)
         .with_cigar()
         .with_index(contam_fasta, None)
-        .expect("Unable to build index")
+        .expect("Unable to build index"))
 }
 
 // Checks if a sequence is a contaminant, and returns true if so
 // A sequence is considered a contaminant if there is an alignment of at least 90% between query and  target
-fn is_contamination(readseq: &&[u8], contam: &Aligner) -> bool {
+fn is_contamination(readseq: &&[u8], contam: &Arc<Aligner<Built>>) -> bool {
     let alignment = contam
-        .map(readseq, false, false, None, None)
+        .map(readseq, false, false, None, None, None)
         .expect("Unable to align");
     let query_len = readseq.len() as f64;
     if alignment.is_empty() {
