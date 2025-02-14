@@ -8,8 +8,12 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use std::io::Write;
+use std::sync::Mutex;
+
 mod utils;
 use utils::file_reader;
+use utils::file_writer;
 
 // The arguments end up in the Cli struct
 #[derive(Parser, Debug)]
@@ -48,6 +52,10 @@ struct Cli {
     #[arg(short, long, value_parser)]
     contam: Option<String>,
 
+    /// Output contaminants to a file
+    #[arg(long, value_parser)]
+    output_contam: Option<String>,
+
     /// Output the opposite of the normal results
     #[arg(long)]
     inverse: bool,
@@ -55,6 +63,10 @@ struct Cli {
     /// Input filename [default: read from stdin]
     #[arg(short = 'i', long = "input", value_parser)]
     input: Option<String>,
+
+    /// Output filename [default: write to stdout]
+    #[arg(short = 'o', long = "output", value_parser)]
+    output: Option<String>,
 
     /// Filter max GC content
     #[arg(long, value_parser, default_value_t = 1.0)]
@@ -82,15 +94,21 @@ fn main() -> Result<(), Box<dyn Error>> {
         .expect("Error: Unable to build threadpool");
 
     let mut reader = file_reader(args.input.as_ref())?;
-    filter(&mut reader, args);
+    let contam_writer = file_writer(args.output_contam.as_ref())?;
+    let output_writer = file_writer(args.output.as_ref())?;
+    filter(&mut reader, output_writer, contam_writer, args);
 
     Ok(())
 }
 
 /// This function filters fastq on stdin based on quality, maxlength and minlength
 /// and applies trimming before writting to stdout
-fn filter<T>(input: &mut T, args: Cli)
-where
+fn filter<T>(
+    input: &mut T,
+    output_writer: Arc<Mutex<Box<dyn Write + Send>>>,
+    contam_writer: Arc<Mutex<Box<dyn Write + Send>>>,
+    args: Cli,
+) where
     T: Read + std::marker::Send,
 {
     match args.contam {
@@ -129,17 +147,19 @@ where
                                 && read_gc >= args.mingc
                                 && read_gc <= args.maxgc
                                 && read_len >= args.minlength
-                                && read_len <= args.maxlength
-                                && !is_contamination(&record.seq(), &aligner))
+                                && read_len <= args.maxlength)
                                 || (args.inverse
                                     && (average_quality < args.minqual
                                         || average_quality > args.maxqual
                                         || read_len < args.minlength
-                                        || read_len > args.maxlength
-                                        || is_contamination(&record.seq(), &aligner)))
+                                        || read_len > args.maxlength))
                             {
-                                write_record(record, &args, read_len);
-                                output_reads_.fetch_add(1, Ordering::SeqCst);
+                                if is_contamination(&record.seq(), &aligner) {
+                                    write_record(record, &args, contam_writer.clone(), read_len);
+                                } else {
+                                    write_record(record, &args, output_writer.clone(), read_len);
+                                    output_reads_.fetch_add(1, Ordering::SeqCst);
+                                }
                             }
                         }
                     }
@@ -188,7 +208,7 @@ where
                                         || read_len < args.minlength
                                         || read_len > args.maxlength))
                             {
-                                write_record(record, &args, read_len);
+                                write_record(record, &args, output_writer.clone(), read_len);
                                 output_reads_.fetch_add(1, Ordering::SeqCst);
                             }
                         }
@@ -202,7 +222,12 @@ where
     }
 }
 
-fn write_record(record: fastq::Record, args: &Cli, read_len: usize) {
+fn write_record(
+    record: fastq::Record,
+    args: &Cli,
+    writer: Arc<Mutex<Box<dyn std::io::Write + Send>>>,
+    read_len: usize,
+) {
     // Check if a description attribute is present, taken from the bio-rust code to format fastq
     let header = match record.desc() {
         Some(d) => format!("{} {}", record.id(), d),
@@ -210,14 +235,19 @@ fn write_record(record: fastq::Record, args: &Cli, read_len: usize) {
     };
     // Print out the records passing the filters, applying trimming on seq and qual
     // Could consider to use unsafe `from_utf8_unchecked`
-    println!(
-        "@{}\n{}\n+\n{}",
+    let output_str = format!(
+        "@{}\n{}\n+\n{}\n",
         header,
         std::str::from_utf8(&record.seq()[args.headcrop..read_len - args.tailcrop])
             .expect("ERROR: problem writing fastq seq"),
         std::str::from_utf8(&record.qual()[args.headcrop..read_len - args.tailcrop])
             .expect("ERROR: problem writing fastq qual")
     );
+    writer
+        .lock()
+        .unwrap()
+        .write_all(output_str.as_bytes())
+        .unwrap();
 }
 
 /// This function calculates the average quality of a read, and does this correctly
@@ -289,19 +319,23 @@ fn test_ave_qual() {
 fn test_filter() {
     filter(
         &mut std::fs::File::open("test-data/test.fastq").unwrap(),
+        Arc::new(Mutex::new(Box::new(std::io::stdout()))),
+        Arc::new(Mutex::new(Box::new(std::io::stdout()))),
         Cli {
-            minlength: 100,
-            maxlength: 100000,
             minqual: 5.0,
             maxqual: 200.0,
+            minlength: 100,
+            maxlength: 100000,
             headcrop: 10,
             tailcrop: 10,
             threads: 1,
             contam: None,
+            output_contam: None,
             inverse: false,
             input: None,
-            mingc: 0.0,
+            output: None,
             maxgc: 1.0,
+            mingc: 0.0,
         },
     );
 }
@@ -334,19 +368,23 @@ fn test_no_contam() {
 fn test_filter_with_contam() {
     filter(
         &mut std::fs::File::open("test-data/test.fastq").unwrap(),
+        Arc::new(Mutex::new(Box::new(std::io::stdout()))),
+        Arc::new(Mutex::new(Box::new(std::io::stdout()))),
         Cli {
-            minlength: 100,
-            maxlength: 100000,
             minqual: 5.0,
             maxqual: 100.0,
+            minlength: 100,
+            maxlength: 100000,
             headcrop: 10,
             tailcrop: 10,
             threads: 1,
             contam: Some("test-data/random_contam.fa".to_owned()),
+            output_contam: None,
             inverse: false,
             input: None,
-            mingc: 0.0,
+            output: None,
             maxgc: 1.0,
+            mingc: 0.0,
         },
     );
 }

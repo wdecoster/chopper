@@ -1,8 +1,12 @@
+use flate2::{write, Compression};
+use std::ffi::OsStr;
+use std::fs::File;
+use std::io::{BufWriter, Read, Write};
+use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::{
     error::Error,
-    fs::File,
-    io::{self, prelude::*, BufRead, BufReader},
-    path::Path,
+    io::{self, BufRead, BufReader},
 };
 use std::io::IsTerminal;
 
@@ -55,6 +59,42 @@ fn is_xz<P: AsRef<Path> + Copy>(file_name: P) -> Result<bool, Box<dyn Error>> {
             .as_ref()
             .extension()
             .is_some_and(|ext| ext == "xz"))
+}
+
+// Creates a handy writer to output to either a file or stdout (and automatically compresses if the file extension is .gz)
+pub fn file_writer<P>(
+    file_out: Option<P>,
+) -> Result<Arc<Mutex<Box<dyn Write + Send>>>, Box<dyn Error>>
+where
+    P: AsRef<Path> + Copy,
+{
+    if let Some(file_name) = file_out {
+        let file_name = file_name.as_ref();
+        let file = match File::create(&file_name) {
+            Err(why) => panic!("couldn't open {}: {}", file_name.display(), why.to_string()),
+            Ok(file) => file,
+        };
+
+        if file_name.extension() == Some(OsStr::new("gz")) {
+            Ok(Arc::new(Mutex::new(Box::new(BufWriter::with_capacity(
+                128 * 1024,
+                write::GzEncoder::new(file, Compression::default()),
+            )))))
+        } else {
+            Ok(Arc::new(Mutex::new(Box::new(BufWriter::with_capacity(
+                128 * 1024,
+                file,
+            )))))
+        }
+    } else {
+        if atty::is(atty::Stream::Stdout) {
+            eprintln!("Warning: no redirection detected, not writing anywhere");
+            Ok(Arc::new(Mutex::new(Box::new(io::sink()))))
+        } else {
+            let fp = BufWriter::new(io::stdout());
+            Ok(Arc::new(Mutex::new(Box::new(fp))))
+        }
+    }
 }
 
 pub fn file_reader<P>(file_in: Option<P>) -> Result<Box<dyn BufRead + Send>, Box<dyn Error>>
