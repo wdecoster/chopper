@@ -29,8 +29,8 @@ struct Cli {
 
     /// Sets a maximum read length
     // Default is largest i32. Better would be to explicitly use Inf, but couldn't figure it out.
-    #[arg(long, value_parser, default_value_t = 2147483647)]
-    maxlength: usize,
+    #[arg(long, value_parser)]
+    maxlength: Option<usize>,
 
     /// Trim N nucleotides from the start of a read
     #[arg(long, value_parser, default_value_t = 0)]
@@ -112,7 +112,7 @@ where
                         let read_len = record.seq().len();
                         // If a read is shorter than what is to be cropped the read is dropped entirely (filtered out)
 
-                        // Check if gc content filter exist, if no gc content filter is set pass the 0.5 to pass all the follwoing filter
+                        // Check if gc content filter exist, if no gc content filter is set pass the 0.5 to pass all the following filter
                         let read_gc = if args.mingc != 0.0 || args.maxgc != 1.0 {
                             cal_gc(record.seq())
                         } else {
@@ -120,22 +120,20 @@ where
                         };
 
                         if args.headcrop + args.tailcrop < read_len {
-                            let average_quality = ave_qual(
-                                &record.qual().iter().map(|i| i - 33).collect::<Vec<u8>>(),
-                            );
+                            let average_quality = ave_qual(record.qual());
                             if (!args.inverse
                                 && average_quality >= args.minqual
                                 && average_quality <= args.maxqual
                                 && read_gc >= args.mingc
                                 && read_gc <= args.maxgc
                                 && read_len >= args.minlength
-                                && read_len <= args.maxlength
+                                && (args.maxlength.is_none() || read_len <= args.maxlength.unwrap())
                                 && !is_contamination(&record.seq(), &aligner))
                                 || (args.inverse
                                     && (average_quality < args.minqual
                                         || average_quality > args.maxqual
                                         || read_len < args.minlength
-                                        || read_len > args.maxlength
+                                        || (args.maxlength.is_some() && read_len > args.maxlength.unwrap())
                                         || is_contamination(&record.seq(), &aligner)))
                             {
                                 write_record(record, &args, read_len);
@@ -173,7 +171,7 @@ where
 
                         if args.headcrop + args.tailcrop < read_len {
                             let average_quality = ave_qual(
-                                &record.qual().iter().map(|i| i - 33).collect::<Vec<u8>>(),
+                                record.qual(),
                             );
                             if (!args.inverse
                                 && average_quality >= args.minqual
@@ -181,12 +179,12 @@ where
                                 && read_gc >= args.mingc
                                 && read_gc <= args.maxgc
                                 && read_len >= args.minlength
-                                && read_len <= args.maxlength)
+                                && (args.maxlength.is_none() || read_len <= args.maxlength.unwrap()))
                                 || (args.inverse
                                     && (average_quality < args.minqual
                                         || average_quality > args.maxqual
                                         || read_len < args.minlength
-                                        || read_len > args.maxlength))
+                                        || (args.maxlength.is_some() && read_len > args.maxlength.unwrap())))
                             {
                                 write_record(record, &args, read_len);
                                 output_reads_.fetch_add(1, Ordering::SeqCst);
@@ -203,20 +201,22 @@ where
 }
 
 fn write_record(record: fastq::Record, args: &Cli, read_len: usize) {
-    // Check if a description attribute is present, taken from the bio-rust code to format fastq
+    // Use a single formatted string with one allocation
     let header = match record.desc() {
-        Some(d) => format!("{} {}", record.id(), d),
-        None => record.id().to_owned(),
+        Some(d) => format!("@{} {}", record.id(), d),
+        None => format!("@{}", record.id()),
     };
-    // Print out the records passing the filters, applying trimming on seq and qual
-    // Could consider to use unsafe `from_utf8_unchecked`
+    
+    // Avoid unnecessary from_utf8 calls when working with known ASCII data
+    let seq_slice = &record.seq()[args.headcrop..read_len - args.tailcrop];
+    let qual_slice = &record.qual()[args.headcrop..read_len - args.tailcrop];
+    
+    // Use a single print to minimize syscalls
     println!(
-        "@{}\n{}\n+\n{}",
+        "{}\n{}\n+\n{}",
         header,
-        std::str::from_utf8(&record.seq()[args.headcrop..read_len - args.tailcrop])
-            .expect("ERROR: problem writing fastq seq"),
-        std::str::from_utf8(&record.qual()[args.headcrop..read_len - args.tailcrop])
-            .expect("ERROR: problem writing fastq qual")
+        unsafe { std::str::from_utf8_unchecked(seq_slice) },
+        unsafe { std::str::from_utf8_unchecked(qual_slice) }
     );
 }
 
@@ -224,10 +224,9 @@ fn write_record(record: fastq::Record, args: &Cli, read_len: usize) {
 /// First the Phred scores are converted to probabilities (10^(q)/-10) and summed
 /// and then divided by the number of bases/scores and converted to Phred again -10*log10(average)
 fn ave_qual(quals: &[u8]) -> f64 {
-    let probability_sum = quals
-        .iter()
-        .map(|q| 10_f64.powf((*q as f64) / -10.0))
-        .sum::<f64>();
+    let probability_sum = quals.iter()
+        .fold(0.0, |sum, &q| sum + 10_f64.powf(((q -33) as f64) / -10.0));
+    
     (probability_sum / quals.len() as f64).log10() * -10.0
 }
 
@@ -257,29 +256,33 @@ fn is_contamination(readseq: &&[u8], contam: &Arc<Aligner<Built>>) -> bool {
 }
 
 fn cal_gc(readseq: &[u8]) -> f64 {
-    let gc_count = readseq
-        .iter()
-        .filter(|&&base| base == b'G' || base == b'g' || base == b'C' || base == b'c')
-        .count();
+    let gc_count = readseq.iter().fold(0, |count, &base| {
+        count + match base {
+            b'G' | b'g' | b'C' | b'c' => 1,
+            _ => 0,
+        }
+    });
+    
     (gc_count as f64) / (readseq.len() as f64)
 }
 
 #[test]
 fn test_ave_qual() {
-    assert_eq!(ave_qual(&[10]), 10.0);
-    assert!((ave_qual(&[10, 11, 12]) - 10.923583702678473) < 0.00001);
-    assert!((ave_qual(&[10, 11, 12, 20, 30, 40, 50]) - 14.408827647036087) < 0.00001);
+    // Original test values need to be adjusted by adding 33 to each value
+    assert_eq!(ave_qual(&[10+33]), 10.0);
+    assert!((ave_qual(&[10+33, 11+33, 12+33]) - 10.923583702678473) < 0.00001);
+    assert!((ave_qual(&[10+33, 11+33, 12+33, 20+33, 30+33, 40+33, 50+33]) - 14.408827647036087) < 0.00001);
     assert!(
         (ave_qual(&[
-            17, 19, 11, 5, 3, 19, 22, 24, 20, 22, 30, 31, 32, 20, 21, 30, 28, 10, 13, 12, 18, 18,
-            18, 19, 24, 25, 35, 33, 34, 35, 34, 27, 29, 25, 21, 18, 19, 12, 14, 15, 24, 26, 24, 7,
-            12, 17, 17, 19, 17, 8, 14, 15, 13, 15, 9, 3, 4, 23, 23, 29, 23, 10, 29, 30, 31, 27, 25,
-            14, 2, 13, 19, 14, 13, 13, 3, 2, 10, 17, 19, 25, 27, 20, 19, 11, 5, 7, 8, 8, 5, 2, 10,
-            12, 16, 18, 16, 14, 12, 15, 2, 3, 11, 10, 15, 17, 17, 16, 13, 18, 26, 26, 23, 25, 23,
-            18, 16, 33, 30, 26, 26, 21, 23, 8, 8, 11, 11, 6, 14, 19, 22, 20, 20, 18, 17, 20, 23,
-            24, 28, 28, 28, 21, 20, 25, 27, 37, 28, 36, 29, 24, 27, 16, 18, 12, 8, 5, 3, 4, 6, 5,
-            4, 4, 2, 10, 12, 6, 9, 9, 15, 16, 11, 10, 8, 8, 4, 3, 5, 4, 6, 15, 10, 9, 8, 7, 12, 4,
-            5, 11, 12, 17, 13, 11, 17, 16, 4, 4, 5, 5, 12, 18, 17, 21
+            17+33, 19+33, 11+33, 5+33, 3+33, 19+33, 22+33, 24+33, 20+33, 22+33, 30+33, 31+33, 32+33, 20+33, 21+33, 30+33, 28+33, 10+33, 13+33, 12+33, 18+33, 18+33,
+            18+33, 19+33, 24+33, 25+33, 35+33, 33+33, 34+33, 35+33, 34+33, 27+33, 29+33, 25+33, 21+33, 18+33, 19+33, 12+33, 14+33, 15+33, 24+33, 26+33, 24+33, 7+33,
+            12+33, 17+33, 17+33, 19+33, 17+33, 8+33, 14+33, 15+33, 13+33, 15+33, 9+33, 3+33, 4+33, 23+33, 23+33, 29+33, 23+33, 10+33, 29+33, 30+33, 31+33, 27+33, 25+33,
+            14+33, 2+33, 13+33, 19+33, 14+33, 13+33, 13+33, 3+33, 2+33, 10+33, 17+33, 19+33, 25+33, 27+33, 20+33, 19+33, 11+33, 5+33, 7+33, 8+33, 8+33, 5+33, 2+33, 10+33,
+            12+33, 16+33, 18+33, 16+33, 14+33, 12+33, 15+33, 2+33, 3+33, 11+33, 10+33, 15+33, 17+33, 17+33, 16+33, 13+33, 18+33, 26+33, 26+33, 23+33, 25+33, 23+33,
+            18+33, 16+33, 33+33, 30+33, 26+33, 26+33, 21+33, 23+33, 8+33, 8+33, 11+33, 11+33, 6+33, 14+33, 19+33, 22+33, 20+33, 20+33, 18+33, 17+33, 20+33, 23+33,
+            24+33, 28+33, 28+33, 28+33, 21+33, 20+33, 25+33, 27+33, 37+33, 28+33, 36+33, 29+33, 24+33, 27+33, 16+33, 18+33, 12+33, 8+33, 5+33, 3+33, 4+33, 6+33, 5+33,
+            4+33, 4+33, 2+33, 10+33, 12+33, 6+33, 9+33, 9+33, 15+33, 16+33, 11+33, 10+33, 8+33, 8+33, 4+33, 3+33, 5+33, 4+33, 6+33, 15+33, 10+33, 9+33, 8+33, 7+33, 12+33, 4+33,
+            5+33, 11+33, 12+33, 17+33, 13+33, 11+33, 17+33, 16+33, 4+33, 4+33, 5+33, 5+33, 12+33, 18+33, 17+33, 21+33
         ]) - 10.017407548271677)
             < 0.00001
     )
@@ -291,7 +294,7 @@ fn test_filter() {
         &mut std::fs::File::open("test-data/test.fastq").unwrap(),
         Cli {
             minlength: 100,
-            maxlength: 100000,
+            maxlength: Some(100000),
             minqual: 5.0,
             maxqual: 200.0,
             headcrop: 10,
@@ -336,7 +339,7 @@ fn test_filter_with_contam() {
         &mut std::fs::File::open("test-data/test.fastq").unwrap(),
         Cli {
             minlength: 100,
-            maxlength: 100000,
+            maxlength: Some(100000),
             minqual: 5.0,
             maxqual: 100.0,
             headcrop: 10,
