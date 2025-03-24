@@ -24,7 +24,7 @@ FLAGS:
 
 OPTIONS:
         --headcrop      Trim N nucleotides from the start of a read [default: 0]
-        --maxlength     Sets a maximum read length [default: 2147483647]
+        --maxlength     Sets a maximum read length
     -l, --minlength     Sets a minimum read length [default: 1]
     -q, --quality       Sets a minimum Phred average quality score [default: 0]
         --tailcrop      Trim N nucleotides from the end of a read [default: 0]
