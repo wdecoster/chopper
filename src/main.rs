@@ -63,6 +63,10 @@ struct Cli {
     /// Filter min GC content
     #[arg(long, value_parser, default_value_t = 0.0)]
     mingc: f64,
+
+    /// Set a q-score cutoff to trim read ends
+    #[arg(long, value_parser)]
+    trim: Option<u8>,
 }
 
 fn is_file(pathname: &str) -> Result<(), String> {
@@ -76,6 +80,14 @@ fn is_file(pathname: &str) -> Result<(), String> {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Cli::parse();
+    
+    // Check for incompatible trimming options
+    if args.trim.is_some() && (args.headcrop > 0 || args.tailcrop > 0) {
+        eprintln!("Error: Cannot use --headcrop or --tailcrop together with --trim");
+        eprintln!("Please use either manual trimming (--headcrop/--tailcrop) or quality-based trimming (--trim), but not both.");
+        std::process::exit(1);
+    }
+    
     rayon::ThreadPoolBuilder::new()
         .num_threads(args.threads)
         .build_global()
@@ -136,8 +148,9 @@ where
                                         || (args.maxlength.is_some() && read_len > args.maxlength.unwrap())
                                         || is_contamination(&record.seq(), &aligner)))
                             {
-                                write_record(record, &args, read_len);
-                                output_reads_.fetch_add(1, Ordering::SeqCst);
+                                if write_record(record, &args, read_len) {
+                                    output_reads_.fetch_add(1, Ordering::SeqCst);
+                                }
                             }
                         }
                     }
@@ -186,8 +199,9 @@ where
                                         || read_len < args.minlength
                                         || (args.maxlength.is_some() && read_len > args.maxlength.unwrap())))
                             {
-                                write_record(record, &args, read_len);
-                                output_reads_.fetch_add(1, Ordering::SeqCst);
+                                if write_record(record, &args, read_len) {
+                                    output_reads_.fetch_add(1, Ordering::SeqCst);
+                                }
                             }
                         }
                     }
@@ -200,16 +214,46 @@ where
     }
 }
 
-fn write_record(record: fastq::Record, args: &Cli, read_len: usize) {
-    // Use a single formatted string with one allocation
+/// Write a record to stdout, applying trimming as specified in args
+/// Returns true if the record was successfully written, false if it was completely trimmed away
+fn write_record(record: fastq::Record, args: &Cli, read_len: usize) -> bool {
+    // Determine trimming approach - either quality-based or fixed position
+    let (start_pos, end_pos) = if let Some(trim_threshold) = args.trim {
+        // Quality-based trimming
+        let quals = record.qual();
+        
+        // Find first position from start with quality >= threshold
+        let mut trim_start = 0;
+        while trim_start < read_len && (quals[trim_start] - 33) < trim_threshold {
+            trim_start += 1;
+        }
+        
+        // Find first position from end with quality >= threshold
+        let mut trim_end = read_len;
+        while trim_end > trim_start && (quals[trim_end - 1] - 33) < trim_threshold {
+            trim_end -= 1;
+        }
+        
+        (trim_start, trim_end)
+    } else {
+        // Fixed-position trimming (headcrop/tailcrop)
+        (args.headcrop, read_len - args.tailcrop)
+    };
+    
+    // Skip outputting if the read would be completely trimmed away
+    if start_pos >= end_pos {
+        return false;  // Indicate that the read wasn't written
+    }
+    
+    // Use a single formatted string with one allocation for the header
     let header = match record.desc() {
         Some(d) => format!("@{} {}", record.id(), d),
         None => format!("@{}", record.id()),
     };
     
-    // Avoid unnecessary from_utf8 calls when working with known ASCII data
-    let seq_slice = &record.seq()[args.headcrop..read_len - args.tailcrop];
-    let qual_slice = &record.qual()[args.headcrop..read_len - args.tailcrop];
+    // Apply the trimming to both sequence and quality data
+    let seq_slice = &record.seq()[start_pos..end_pos];
+    let qual_slice = &record.qual()[start_pos..end_pos];
     
     // Use a single print to minimize syscalls
     println!(
@@ -218,6 +262,8 @@ fn write_record(record: fastq::Record, args: &Cli, read_len: usize) {
         unsafe { std::str::from_utf8_unchecked(seq_slice) },
         unsafe { std::str::from_utf8_unchecked(qual_slice) }
     );
+    
+    true  // Indicate that the read was successfully written
 }
 
 /// This function calculates the average quality of a read, and does this correctly
@@ -305,6 +351,7 @@ fn test_filter() {
             input: None,
             mingc: 0.0,
             maxgc: 1.0,
+            trim: None,
         },
     );
 }
@@ -350,6 +397,7 @@ fn test_filter_with_contam() {
             input: None,
             mingc: 0.0,
             maxgc: 1.0,
+            trim: None,
         },
     );
 }
