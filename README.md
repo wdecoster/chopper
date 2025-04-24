@@ -18,21 +18,24 @@ Alternatively, use conda to install
 Reads on stdin and writes to stdout.
 
 ```text
-FLAGS:
-    -h, --help       Prints help information
-    -V, --version    Prints version information
+Usage: chopper [OPTIONS]
 
-OPTIONS:
-        --headcrop      Trim N nucleotides from the start of a read [default: 0]
-        --maxlength     Sets a maximum read length
-    -l, --minlength     Sets a minimum read length [default: 1]
-    -q, --quality       Sets a minimum Phred average quality score [default: 0]
-        --tailcrop      Trim N nucleotides from the end of a read [default: 0]
-        --threads       Number of parallel threads to use [default: 4]
-        --contam        Fasta file with reference to check potential contaminants against [default None]
-    -i, --input         Input filename [default: read from stdin]
-        --maxgc         Sets a maximum GC content [default: 1.0]
-        --mingc         Sets a minimum GC content [default: 0.0]
+Options:
+  -q, --quality <MINQUAL>      Sets a minimum Phred average quality score [default: 0]
+      --maxqual <MAXQUAL>      Sets a maximum Phred average quality score [default: 1000]
+  -l, --minlength <MINLENGTH>  Sets a minimum read length [default: 1]
+      --maxlength <MAXLENGTH>  Sets a maximum read length
+      --headcrop <HEADCROP>    Trim N nucleotides from the start of a read [default: 0]
+      --tailcrop <TAILCROP>    Trim N nucleotides from the end of a read [default: 0]
+  -t, --threads <THREADS>      Use N parallel threads [default: 4]
+  -c, --contam <CONTAM>        Filter contaminants against a fasta
+      --inverse                Output the opposite of the normal results
+  -i, --input <INPUT>          Input filename [default: read from stdin]
+      --maxgc <MAXGC>          Filter max GC content [default: 1]
+      --mingc <MINGC>          Filter min GC content [default: 0]
+      --trim <TRIM>            Set a q-score cutoff to trim read ends
+  -h, --help                   Print help
+  -V, --version                Print version
 ```
 
 EXAMPLES:
