@@ -14,7 +14,6 @@ jobs:
         name: [
             linux,
             linux-musl,
-#            windows,
             macos
         ]
 
@@ -28,10 +27,7 @@ jobs:
             target: x86_64-unknown-linux-musl
             artifact_name: target/x86_64-unknown-linux-musl/release/chopper
             asset_name: chopper-linux-musl
-#          - name: windows
-#            os: windows-latest
-#            artifact_name: target/release/<name>.exe
-#            asset_name: <name>-windows
+            use_cross: true
           - name: macos
             os: macos-latest
             artifact_name: target/release/chopper
@@ -47,20 +43,29 @@ jobs:
         target: ${{ matrix.target }}
         override: true
 
-    - name: Install musl tools
-      if: matrix.name == 'linux-musl'
+    - name: Install Cross
+      if: matrix.use_cross
       run: |
-        sudo apt-get update
-        sudo apt-get install -y musl-tools
+        cargo install cross --git https://github.com/cross-rs/cross
 
-    - name: Build
+    # Standard build for non-musl targets
+    - name: Build (Standard)
+      if: '!matrix.use_cross'
       uses: actions-rs/cargo@v1
       with:
         command: build
         args: --release ${{ matrix.target && format('--target {0}', matrix.target) || '' }} --locked
 
+    # Cross build for musl target
+    - name: Build (Cross)
+      if: matrix.use_cross
+      run: |
+        cross build --target ${{ matrix.target }} --release --locked
+
     - name: Upload binaries to release
-      uses: actions/upload-artifact@v4
+      uses: svenstaro/upload-release-action@v2
       with:
-        name: ${{ matrix.asset_name }}
-        path: ${{ matrix.artifact_name }}
+        repo_token: ${{ secrets.GITHUB_TOKEN }}
+        file: ${{ matrix.artifact_name }}
+        asset_name: ${{ matrix.asset_name }}
+        tag: ${{ github.ref }}
