@@ -267,13 +267,19 @@ fn write_record(record: fastq::Record, args: &Cli, read_len: usize) -> bool {
 }
 
 /// This function calculates the average quality of a read, and does this correctly
-/// First the Phred scores are converted to probabilities (10^(q)/-10) and summed
+/// First the Phred scores are converted to probabilities using `phred_quality_to_probability` and summed
 /// and then divided by the number of bases/scores and converted to Phred again -10*log10(average)
 fn ave_qual(quals: &[u8]) -> f64 {
     let probability_sum = quals.iter()
-        .fold(0.0, |sum, &q| sum + 10_f64.powf(((q -33) as f64) / -10.0));
+        .fold(0.0, |sum, &q| sum + phred_score_to_probability(q));
     
     (probability_sum / quals.len() as f64).log10() * -10.0
+}
+
+/// This function convert a Phred score to a probability
+/// using the formula: 10^(-q/10)
+fn phred_score_to_probability(phred: u8) -> f64 {
+    10_f64.powf(((phred -33) as f64) / -10.0)
 }
 
 fn setup_contamination_filter(contam_fasta: &str, threads: &usize) -> Arc<Aligner<Built>> {
@@ -442,4 +448,18 @@ fn test_quals() {
         ],
         "quals not as expected!"
     )
+}
+
+#[test]
+fn phred_score_to_probability_test() {
+    let cases: [(u8, f64); 4] = [
+        (20 + 33, 0.01), // Q20
+        (30 + 33, 0.001), // Q30
+        (15 + 33, 0.03162277660168379), // Q15
+        (25 + 33, 0.0031622776601683794), // Q25
+    ];
+
+    for (phred, prob) in cases {
+        assert_eq!(phred_score_to_probability(phred), prob);
+    }
 }
