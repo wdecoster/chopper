@@ -1,5 +1,5 @@
 use bio::io::fastq;
-use clap::Parser;
+use clap::{ Parser, ValueEnum};
 use minimap2::*;
 use rayon::prelude::*;
 use std::error::Error;
@@ -8,9 +8,12 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use trimmers::{ HighestQualityTrimStrategy, TrimStrategy };
+use utils::file_reader;
+
 mod trimmers;
 mod utils;
-use utils::file_reader;
+
 
 // The arguments end up in the Cli struct
 #[derive(Parser, Debug)]
@@ -33,11 +36,22 @@ struct Cli {
     #[arg(long, value_parser)]
     maxlength: Option<usize>,
 
-    /// Trim N nucleotides from the start of a read
+    /// Select the trimming strategy to apply to the reads.
+    #[arg(long="trim-approach", value_parser)]
+    trim_approach: Option<TrimApproach>,
+
+    /// Set the minimum quality score (Q-score) threshold for trimming low-quality bases from read ends.
+    /// Required when using the `trim-by-quality` or `best-subread` trimming approaches.
+    #[arg(long, value_parser)]
+    cutoff: Option<u8>,
+
+    /// Trim N bases from the start of each read.
+    /// Required only when using the `fixed-crop` trimming approach.
     #[arg(long, value_parser, default_value_t = 0)]
     headcrop: usize,
 
-    /// Trim N nucleotides from the end of a read
+    /// Trim N bases from the end of each read.
+    /// Required only when using the `fixed-crop` trimming approach.
     #[arg(long, value_parser, default_value_t = 0)]
     tailcrop: usize,
 
@@ -64,10 +78,19 @@ struct Cli {
     /// Filter min GC content
     #[arg(long, value_parser, default_value_t = 0.0)]
     mingc: f64,
+}
 
-    /// Set a q-score cutoff to trim read ends
-    #[arg(long, value_parser)]
-    trim: Option<u8>,
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum TrimApproach {
+    /// Remove a fixed number of bases from both ends of the read.
+    /// Requires setting both --headcrop and --tailcrop.
+    FixedCrop,
+    /// Trim low-quality bases from the ends of the read until reaching
+    /// a base with quality ≥ --cutoff.
+    TrimByQuality,
+    /// Extract the highest-quality subread based on --cutoff, trimming
+    /// low-quality bases from both ends.
+    BestSubread
 }
 
 fn is_file(pathname: &str) -> Result<(), String> {
@@ -79,11 +102,37 @@ fn is_file(pathname: &str) -> Result<(), String> {
     }
 }
 
+/// Validates that all required arguments are set for the selected trimming approach.
+/// Exits the program with an error message if required arguments are missing.
+fn check_trimming_approach_args(args: &Cli) {
+    if let Some(trim_approach) = args.trim_approach {
+        match trim_approach {
+            TrimApproach::FixedCrop => {
+                if args.headcrop == 0 && args.tailcrop == 0 {
+                    eprintln!(
+                        "Error: When using the 'fixed-crop' trimming approach, at least one of --headcrop or --tailcrop must be greater than 0."
+                    );
+                    std::process::exit(1);
+                }
+            },
+            _ => {
+                if let None = args.cutoff {
+                    eprintln!(
+                        "Error: When using the 'best-subread' or 'trim-by-quality' trimming approaches, the --cutoff parameter must be set."
+                    );
+                    std::process::exit(1);
+                }
+            }
+        };
+    };
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Cli::parse();
     
-    // Check for incompatible trimming options
-    if args.trim.is_some() && (args.headcrop > 0 || args.tailcrop > 0) {
+    check_trimming_approach_args(&args);
+
+    if args.cutoff.is_some() && (args.headcrop > 0 || args.tailcrop > 0) {
         eprintln!("Error: Cannot use --headcrop or --tailcrop together with --trim");
         eprintln!("Please use either manual trimming (--headcrop/--tailcrop) or quality-based trimming (--trim), but not both.");
         std::process::exit(1);
@@ -99,6 +148,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     Ok(())
 }
+
 
 /// This function filters fastq on stdin based on quality, maxlength and minlength
 /// and applies trimming before writting to stdout
@@ -218,27 +268,38 @@ where
 /// Write a record to stdout, applying trimming as specified in args
 /// Returns true if the record was successfully written, false if it was completely trimmed away
 fn write_record(record: fastq::Record, args: &Cli, read_len: usize) -> bool {
-    // Determine trimming approach - either quality-based or fixed position
-    let (start_pos, end_pos) = if let Some(trim_threshold) = args.trim {
-        // Quality-based trimming
-        let quals = record.qual();
-        
-        // Find first position from start with quality >= threshold
-        let mut trim_start = 0;
-        while trim_start < read_len && (quals[trim_start] - 33) < trim_threshold {
-            trim_start += 1;
+    // Running the trimming approach if it was set.
+    let (start_pos, end_pos) = if let Some(trim_approach) = args.trim_approach {
+        match trim_approach {
+            TrimApproach::FixedCrop => (args.headcrop, read_len - args.tailcrop),
+            TrimApproach::TrimByQuality => {
+                let trim_threshold = args.cutoff.unwrap();
+
+                // Quality-based trimming
+                let quals = record.qual();
+                
+                // Find first position from start with quality >= threshold
+                let mut trim_start = 0;
+                while trim_start < read_len && (quals[trim_start] - 33) < trim_threshold {
+                    trim_start += 1;
+                }
+                
+                // Find first position from end with quality >= threshold
+                let mut trim_end = read_len;
+                while trim_end > trim_start && (quals[trim_end - 1] - 33) < trim_threshold {
+                    trim_end -= 1;
+                }
+                
+                (trim_start, trim_end)
+            },
+            TrimApproach::BestSubread => {
+                HighestQualityTrimStrategy::new(
+                    phred_score_to_probability(args.cutoff.unwrap() + 33)
+                ).trim(&record).unwrap_or((0,0))
+            }
         }
-        
-        // Find first position from end with quality >= threshold
-        let mut trim_end = read_len;
-        while trim_end > trim_start && (quals[trim_end - 1] - 33) < trim_threshold {
-            trim_end -= 1;
-        }
-        
-        (trim_start, trim_end)
     } else {
-        // Fixed-position trimming (headcrop/tailcrop)
-        (args.headcrop, read_len - args.tailcrop)
+        (0, read_len)
     };
     
     // Skip outputting if the read would be completely trimmed away
@@ -350,6 +411,8 @@ fn test_filter() {
             maxlength: Some(100000),
             minqual: 5.0,
             maxqual: 200.0,
+            trim_approach: Some(TrimApproach::FixedCrop),
+            cutoff: None,
             headcrop: 10,
             tailcrop: 10,
             threads: 1,
@@ -358,7 +421,52 @@ fn test_filter() {
             input: None,
             mingc: 0.0,
             maxgc: 1.0,
-            trim: None,
+        },
+    );
+}
+
+#[test]
+fn test_filter_with_trim_by_quality_approach() {
+    filter(
+        &mut std::fs::File::open("test-data/test.fastq").unwrap(),
+        Cli {
+            minlength: 100,
+            maxlength: Some(100000),
+            minqual: 5.0,
+            maxqual: 200.0,
+            trim_approach: Some(TrimApproach::TrimByQuality),
+            cutoff: Some(10),
+            headcrop: 0,
+            tailcrop: 0,
+            threads: 1,
+            contam: None,
+            inverse: false,
+            input: None,
+            mingc: 0.0,
+            maxgc: 1.0,
+        },
+    );
+}
+
+#[test]
+fn test_filter_with_best_subread_approach() {
+    filter(
+        &mut std::fs::File::open("test-data/test.fastq").unwrap(),
+        Cli {
+            minlength: 100,
+            maxlength: Some(100000),
+            minqual: 5.0,
+            maxqual: 200.0,
+            trim_approach: Some(TrimApproach::BestSubread),
+            cutoff: Some(10),
+            headcrop: 0,
+            tailcrop: 0,
+            threads: 1,
+            contam: None,
+            inverse: false,
+            input: None,
+            mingc: 0.0,
+            maxgc: 1.0,
         },
     );
 }
@@ -396,6 +504,8 @@ fn test_filter_with_contam() {
             maxlength: Some(100000),
             minqual: 5.0,
             maxqual: 100.0,
+            trim_approach: Some(TrimApproach::FixedCrop),
+            cutoff: None,
             headcrop: 10,
             tailcrop: 10,
             threads: 1,
@@ -404,7 +514,6 @@ fn test_filter_with_contam() {
             input: None,
             mingc: 0.0,
             maxgc: 1.0,
-            trim: None,
         },
     );
 }
