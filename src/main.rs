@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use trimmers::{ HighestQualityTrimStrategy, TrimStrategy };
+use trimmers::*;
 use utils::file_reader;
 
 mod trimmers;
@@ -269,44 +269,33 @@ where
 /// Returns true if the record was successfully written, false if it was completely trimmed away
 fn write_record(record: fastq::Record, args: &Cli, read_len: usize) -> bool {
     // Running the trimming approach if it was set.
-    let (start_pos, end_pos) = if let Some(trim_approach) = args.trim_approach {
+    let some_pos: Option<(usize, usize)> = if let Some(trim_approach) = args.trim_approach {
         match trim_approach {
-            TrimApproach::FixedCrop => (args.headcrop, read_len - args.tailcrop),
+            TrimApproach::FixedCrop => {
+                FixedCropStrategy::new(args.headcrop, args.tailcrop)
+                    .trim(&record)
+            },
             TrimApproach::TrimByQuality => {
-                let trim_threshold = args.cutoff.unwrap();
-
-                // Quality-based trimming
-                let quals = record.qual();
-                
-                // Find first position from start with quality >= threshold
-                let mut trim_start = 0;
-                while trim_start < read_len && (quals[trim_start] - 33) < trim_threshold {
-                    trim_start += 1;
-                }
-                
-                // Find first position from end with quality >= threshold
-                let mut trim_end = read_len;
-                while trim_end > trim_start && (quals[trim_end - 1] - 33) < trim_threshold {
-                    trim_end -= 1;
-                }
-                
-                (trim_start, trim_end)
+                TrimByQualitytrategy::new(args.cutoff.unwrap())
+                    .trim(&record)
             },
             TrimApproach::BestSubread => {
                 HighestQualityTrimStrategy::new(
                     phred_score_to_probability(args.cutoff.unwrap() + 33)
-                ).trim(&record).unwrap_or((0,0))
+                ).trim(&record)
             }
         }
     } else {
-        (0, read_len)
+        Some((0, read_len))
     };
-    
-    // Skip outputting if the read would be completely trimmed away
-    if start_pos >= end_pos {
-        return false;  // Indicate that the read wasn't written
-    }
-    
+
+    let (start_pos, end_pos) = if let Some((s, e)) = some_pos {
+        (s, e)
+    } else {
+        // Skip outputting if the read would be completely trimmed away
+        return false; // Indicate that the read wasn't written
+    };
+
     // Use a single formatted string with one allocation for the header
     let header = match record.desc() {
         Some(d) => format!("@{} {}", record.id(), d),
