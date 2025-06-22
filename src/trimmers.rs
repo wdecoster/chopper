@@ -43,7 +43,6 @@ impl TrimStrategy for HighestQualityTrimStrategy {
         let mut best_length = 0;
 
         let mut current_start = 0;
-        let mut current_end;
         let mut current_cumulative_error = -1.0;
         for (i, phred_qual) in record.qual().iter().enumerate() {
             let prob_error = self.cutoff - phred_score_to_probability(*phred_qual);
@@ -53,14 +52,13 @@ impl TrimStrategy for HighestQualityTrimStrategy {
             } 
 
             current_cumulative_error += prob_error;
-            current_end = i;
             
             if best_cumulative_error < current_cumulative_error ||
-                (best_cumulative_error == current_cumulative_error && best_length < current_end - current_start + 1) {
+                (best_cumulative_error == current_cumulative_error && best_length < i - current_start + 1) {
                 best_start = current_start;
-                best_end = current_end;
+                best_end = i;
                 best_cumulative_error = current_cumulative_error;
-                best_length = current_end - current_start + 1;
+                best_length = i - current_start + 1;
             }
         }
 

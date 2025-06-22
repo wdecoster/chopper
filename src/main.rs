@@ -20,64 +20,64 @@ mod utils;
 #[clap(author, version, about="Filtering and trimming of fastq files. Reads on stdin and writes to stdout.", long_about = None)]
 struct Cli {
     /// Sets a minimum Phred average quality score
-    #[arg(short = 'q', long = "quality", value_parser, default_value_t = 0.0)]
+    #[arg(short = 'q', long = "quality", value_parser, default_value_t = 0.0, help_heading = "Filtering Options")]
     minqual: f64,
 
     /// Sets a maximum Phred average quality score
-    #[arg(long, value_parser, default_value_t = 1000.0)]
+    #[arg(long, value_parser, default_value_t = 1000.0, help_heading = "Filtering Options")]
     maxqual: f64,
 
     /// Sets a minimum read length
-    #[arg(short = 'l', long, value_parser, default_value_t = 1)]
+    #[arg(short = 'l', long, value_parser, default_value_t = 1, help_heading = "Filtering Options")]
     minlength: usize,
 
     /// Sets a maximum read length
     // Default is largest i32. Better would be to explicitly use Inf, but couldn't figure it out.
-    #[arg(long, value_parser)]
+    #[arg(long, value_parser, help_heading = "Filtering Options")]
     maxlength: Option<usize>,
 
+    /// Filter max GC content
+    #[arg(long, value_parser, default_value_t = 1.0, help_heading = "Filtering Options")]
+    maxgc: f64,
+
+    /// Filter min GC content
+    #[arg(long, value_parser, default_value_t = 0.0, help_heading = "Filtering Options")]
+    mingc: f64,
+
+    /// Filter contaminants against a fasta
+    #[arg(short, long, value_parser, help_heading = "Filtering Options")]
+    contam: Option<String>,
+
     /// Select the trimming strategy to apply to the reads.
-    #[arg(long="trim-approach", value_parser)]
+    #[arg(long="trim-approach", value_parser, help_heading = "Trimming Options")]
     trim_approach: Option<TrimApproach>,
 
     /// Set the minimum quality score (Q-score) threshold for trimming low-quality bases from read ends.
     /// Required when using the `trim-by-quality` or `best-subread` trimming approaches.
-    #[arg(long, value_parser)]
+    #[arg(long, value_parser, help_heading = "Trimming Options")]
     cutoff: Option<u8>,
 
     /// Trim N bases from the start of each read.
     /// Required only when using the `fixed-crop` trimming approach.
-    #[arg(long, value_parser, default_value_t = 0)]
+    #[arg(long, value_parser, default_value_t = 0, help_heading = "Trimming Options")]
     headcrop: usize,
 
     /// Trim N bases from the end of each read.
     /// Required only when using the `fixed-crop` trimming approach.
-    #[arg(long, value_parser, default_value_t = 0)]
+    #[arg(long, value_parser, default_value_t = 0, help_heading = "Trimming Options")]
     tailcrop: usize,
 
     /// Use N parallel threads
-    #[arg(short, long, value_parser, default_value_t = 4)]
+    #[arg(short, long, value_parser, default_value_t = 4, help_heading = "Setup Options")]
     threads: usize,
 
-    /// Filter contaminants against a fasta
-    #[arg(short, long, value_parser)]
-    contam: Option<String>,
-
-    /// Output the opposite of the normal results
-    #[arg(long)]
-    inverse: bool,
-
     /// Input filename [default: read from stdin]
-    #[arg(short = 'i', long = "input", value_parser)]
+    #[arg(short = 'i', long = "input", value_parser, help_heading = "Setup Options")]
     input: Option<String>,
 
-    /// Filter max GC content
-    #[arg(long, value_parser, default_value_t = 1.0)]
-    maxgc: f64,
-
-    /// Filter min GC content
-    #[arg(long, value_parser, default_value_t = 0.0)]
-    mingc: f64,
+    /// Output the opposite of the normal results
+    #[arg(long, help_heading = "Setup Options")]
+    inverse: bool,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
