@@ -14,6 +14,23 @@ use utils::file_reader;
 mod trimmers;
 mod utils;
 
+fn parse_usize_or_inf(s: &str) -> Result<usize, String> {
+    if s.to_uppercase() == "INF" {
+        Ok(usize::MAX)
+    } else {
+        s.parse().map_err(|e| format!("Invalid number: {e}"))
+    }
+}
+
+fn parse_gc_value(s: &str) -> Result<f64, String> {
+    let f: f64 = s.parse()
+        .map_err(|e| format!("Invalid number: {e}"))?;
+    if 0.0 <= f && f <= 1.0 {
+        Ok(f)
+    } else {
+        Err(format!("Value out of range. Expected a value from 0 to 1."))
+    }
+}
 
 // The arguments end up in the Cli struct
 #[derive(Parser, Debug)]
@@ -32,17 +49,17 @@ struct Cli {
     minlength: usize,
 
     /// Sets a maximum read length
-    // Default is largest i32. Better would be to explicitly use Inf, but couldn't figure it out.
-    #[arg(long, value_parser, help_heading = "Filtering Options")]
-    maxlength: Option<usize>,
-
-    /// Filter max GC content
-    #[arg(long, value_parser, default_value_t = 1.0, help_heading = "Filtering Options")]
-    maxgc: f64,
+    #[arg(long, value_parser = parse_usize_or_inf, default_value = "INF", help_heading = "Filtering Options")]
+    // #[arg(long, value_parser, default_value_t = usize::MAX, help_heading = "Filtering Options")]
+    maxlength: usize,
 
     /// Filter min GC content
-    #[arg(long, value_parser, default_value_t = 0.0, help_heading = "Filtering Options")]
-    mingc: f64,
+    #[arg(long, value_parser = parse_gc_value, help_heading = "Filtering Options")]
+    mingc: Option<f64>,
+
+    /// Filter max GC content
+    #[arg(long, value_parser = parse_gc_value, help_heading = "Filtering Options")]
+    maxgc: Option<f64>,
 
     /// Filter contaminants against a fasta
     #[arg(short, long, value_parser, help_heading = "Filtering Options")]
@@ -102,41 +119,8 @@ fn is_file(pathname: &str) -> Result<(), String> {
     }
 }
 
-/// Validates that all required arguments are set for the selected trimming approach.
-/// Exits the program with an error message if required arguments are missing.
-fn check_trimming_approach_args(args: &Cli) {
-    if let Some(trim_approach) = args.trim_approach {
-        match trim_approach {
-            TrimApproach::FixedCrop => {
-                if args.headcrop == 0 && args.tailcrop == 0 {
-                    eprintln!(
-                        "Error: When using the 'fixed-crop' trimming approach, at least one of --headcrop or --tailcrop must be greater than 0."
-                    );
-                    std::process::exit(1);
-                }
-            },
-            _ => {
-                if let None = args.cutoff {
-                    eprintln!(
-                        "Error: When using the 'best-subread' or 'trim-by-quality' trimming approaches, the --cutoff parameter must be set."
-                    );
-                    std::process::exit(1);
-                }
-            }
-        };
-    };
-}
-
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Cli::parse();
-    
-    check_trimming_approach_args(&args);
-
-    if args.cutoff.is_some() && (args.headcrop > 0 || args.tailcrop > 0) {
-        eprintln!("Error: Cannot use --headcrop or --tailcrop together with --trim");
-        eprintln!("Please use either manual trimming (--headcrop/--tailcrop) or quality-based trimming (--trim), but not both.");
-        std::process::exit(1);
-    }
     
     rayon::ThreadPoolBuilder::new()
         .num_threads(args.threads)
@@ -149,6 +133,47 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// Validates that all required arguments are set for the selected trimming approach
+/// and return a `Option<Arc<TrimStrategy>>`.
+/// Exits the program with an error message if required arguments are missing.
+fn build_trimming_approach(args: &Cli) -> Option<Arc<dyn TrimStrategy>> {
+    if let Some(trim_approach) = args.trim_approach {
+        match trim_approach {
+            TrimApproach::FixedCrop => {
+                if args.headcrop == 0 && args.tailcrop == 0 {
+                    eprintln!(
+                        "Error: When using the 'fixed-crop' trimming approach, at least one of --headcrop or --tailcrop must be greater than 0."
+                    );
+                    std::process::exit(1);
+                }
+                Some(Arc::new(FixedCropStrategy::new(args.headcrop, args.tailcrop)))
+            },
+            TrimApproach::TrimByQuality => {
+                if let Some(cutoff)= args.cutoff {
+                    Some(Arc::new(TrimByQualitytrategy::new(cutoff)))
+                } else {
+                    eprintln!(
+                        "Error: When using the 'trim-by-quality' trimming approache, the --cutoff parameter must be set."
+                    );
+                    std::process::exit(1);
+                }
+
+            },
+            TrimApproach::BestSubread => {
+                if let Some(cutoff) = args.cutoff {
+                    Some(Arc::new(HighestQualityTrimStrategy::new(phred_score_to_probability(cutoff + 33))))
+                } else {
+                    eprintln!(
+                        "Error: When using the 'best-subread' trimming approache, the --cutoff parameter must be set."
+                    );
+                    std::process::exit(1);
+                }
+            }
+        }
+    } else {
+        None
+    }
+}
 
 /// This function filters fastq on stdin based on quality, maxlength and minlength
 /// and applies trimming before writting to stdout
@@ -156,146 +181,63 @@ fn filter<T>(input: &mut T, args: Cli)
 where
     T: Read + std::marker::Send,
 {
-    match args.contam {
-        Some(ref fas) => {
-            is_file(fas)
-                .unwrap_or_else(|_| panic!("Fasta file for filtering contaminants is invalid",));
+    let aligner_option = if let Some(ref fas) = args.contam {
+        is_file(fas)
+            .unwrap_or_else(|_| panic!("Fasta file for filtering contaminants is invalid",));
 
-            let total_reads_ = Arc::new(AtomicUsize::new(0));
-            let output_reads_ = Arc::new(AtomicUsize::new(0));
+        Some(setup_contamination_filter(fas, &args.threads))
+    } else { None };
 
-            let aligner = setup_contamination_filter(fas, &args.threads);
-            fastq::Reader::new(input)
-                .records()
-                .par_bridge()
-                .for_each(|record| {
-                    let record = record.expect("ERROR: problem parsing fastq record");
-                    total_reads_.fetch_add(1, Ordering::SeqCst);
-                    if !record.is_empty() {
-                        let read_len = record.seq().len();
-                        // If a read is shorter than what is to be cropped the read is dropped entirely (filtered out)
+    let trimmer_strategy = build_trimming_approach(&args);
+    
+    let total_reads_ = Arc::new(AtomicUsize::new(0));
+    let output_reads_ = Arc::new(AtomicUsize::new(0));
 
-                        // Check if gc content filter exist, if no gc content filter is set pass the 0.5 to pass all the following filter
-                        let read_gc = if args.mingc != 0.0 || args.maxgc != 1.0 {
-                            cal_gc(record.seq())
-                        } else {
-                            0.5
-                        };
+    fastq::Reader::new(input)
+        .records()
+        .par_bridge()
+        .for_each(|record| {
+            let record = record.expect("ERROR: problem parsing fastq record");
+            total_reads_.fetch_add(1, Ordering::SeqCst);
 
-                        if args.headcrop + args.tailcrop < read_len {
-                            let average_quality = ave_qual(record.qual());
-                            if (!args.inverse
-                                && average_quality >= args.minqual
-                                && average_quality <= args.maxqual
-                                && read_gc >= args.mingc
-                                && read_gc <= args.maxgc
-                                && read_len >= args.minlength
-                                && (args.maxlength.is_none() || read_len <= args.maxlength.unwrap())
-                                && !is_contamination(&record.seq(), &aligner))
-                                || (args.inverse
-                                    && (average_quality < args.minqual
-                                        || average_quality > args.maxqual
-                                        || read_len < args.minlength
-                                        || (args.maxlength.is_some() && read_len > args.maxlength.unwrap())
-                                        || is_contamination(&record.seq(), &aligner)))
-                            {
-                                if write_record(record, &args, read_len) {
-                                    output_reads_.fetch_add(1, Ordering::SeqCst);
-                                }
-                            }
-                        }
-                    }
-                });
+            if record.is_empty() {
+                return;
+            }
 
-            let output_reads = output_reads_.load(Ordering::SeqCst);
-            let total_reads = total_reads_.load(Ordering::SeqCst);
-            eprintln!("Kept {output_reads} reads out of {total_reads} reads");
-        }
+            let valid_qual = is_valid_quality(&record, args.minqual, args.maxqual);
+            let valid_len = is_valid_length(&record, args.minlength, args.maxlength);
 
-        None => {
-            let total_reads_ = Arc::new(AtomicUsize::new(0));
-            let output_reads_ = Arc::new(AtomicUsize::new(0));
+            // If a GC content filter is set, validate the GC content; otherwise, assume it is valid.
+            let valid_gc_p = if args.mingc.is_some() || args.maxgc.is_some() {
+                is_valid_gc_percent(&record, args.mingc.unwrap_or(0.0), args.maxgc.unwrap_or(1.0))
+            } else { true };
 
-            fastq::Reader::new(input)
-                .records()
-                .par_bridge()
-                .for_each(|record| {
-                    let record = record.expect("ERROR: problem parsing fastq record");
-                    total_reads_.fetch_add(1, Ordering::SeqCst);
-                    if !record.is_empty() {
-                        let read_len = record.seq().len();
-                        // If a read is shorter than what is to be cropped the read is dropped entirely (filtered out)
+            // If a contaminants filter is set, validate the reads; otherwise, assume it is valid
+            let is_not_contam = if let Some(ref aligner) = aligner_option {
+                !is_contamination(&record.seq(), aligner)
+            } else { true };
 
-                        // Check if gc content filter exist, if no gc content filter is set pass the 0.5 to pass all the follwoing filter
-                        let read_gc = if args.mingc != 0.0 || args.maxgc != 1.0 {
-                            cal_gc(record.seq())
-                        } else {
-                            0.5
-                        };
+            if (valid_gc_p && valid_len && valid_qual && is_not_contam) ^ args.inverse {
+                let pos_option = if let Some(ref trimmer) = trimmer_strategy {
+                    trimmer.trim(&record)
+                } else {
+                    Some((0, record.seq().len()))
+                };
 
-                        if args.headcrop + args.tailcrop < read_len {
-                            let average_quality = ave_qual(
-                                record.qual(),
-                            );
-                            if (!args.inverse
-                                && average_quality >= args.minqual
-                                && average_quality <= args.maxqual
-                                && read_gc >= args.mingc
-                                && read_gc <= args.maxgc
-                                && read_len >= args.minlength
-                                && (args.maxlength.is_none() || read_len <= args.maxlength.unwrap()))
-                                || (args.inverse
-                                    && (average_quality < args.minqual
-                                        || average_quality > args.maxqual
-                                        || read_len < args.minlength
-                                        || (args.maxlength.is_some() && read_len > args.maxlength.unwrap())))
-                            {
-                                if write_record(record, &args, read_len) {
-                                    output_reads_.fetch_add(1, Ordering::SeqCst);
-                                }
-                            }
-                        }
-                    }
-                });
+                if let Some((start, end)) = pos_option {
+                    write_record(&record, start, end);
+                    output_reads_.fetch_add(1, Ordering::SeqCst);
+                }
+            }
+        });
 
-            let output_reads = output_reads_.load(Ordering::SeqCst);
-            let total_reads = total_reads_.load(Ordering::SeqCst);
-            eprintln!("Kept {output_reads} reads out of {total_reads} reads");
-        }
-    }
+    let output_reads = output_reads_.load(Ordering::SeqCst);
+    let total_reads = total_reads_.load(Ordering::SeqCst);
+    eprintln!("Kept {output_reads} reads out of {total_reads} reads");
 }
 
-/// Write a record to stdout, applying trimming as specified in args
-/// Returns true if the record was successfully written, false if it was completely trimmed away
-fn write_record(record: fastq::Record, args: &Cli, read_len: usize) -> bool {
-    // Running the trimming approach if it was set.
-    let some_pos: Option<(usize, usize)> = if let Some(trim_approach) = args.trim_approach {
-        match trim_approach {
-            TrimApproach::FixedCrop => {
-                FixedCropStrategy::new(args.headcrop, args.tailcrop)
-                    .trim(&record)
-            },
-            TrimApproach::TrimByQuality => {
-                TrimByQualitytrategy::new(args.cutoff.unwrap())
-                    .trim(&record)
-            },
-            TrimApproach::BestSubread => {
-                HighestQualityTrimStrategy::new(
-                    phred_score_to_probability(args.cutoff.unwrap() + 33)
-                ).trim(&record)
-            }
-        }
-    } else {
-        Some((0, read_len))
-    };
-
-    let (start_pos, end_pos) = if let Some((s, e)) = some_pos {
-        (s, e)
-    } else {
-        // Skip outputting if the read would be completely trimmed away
-        return false; // Indicate that the read wasn't written
-    };
-
+/// Write a record to stdout
+fn write_record(record: &fastq::Record, start_pos: usize, end_pos: usize) {
     // Use a single formatted string with one allocation for the header
     let header = match record.desc() {
         Some(d) => format!("@{} {}", record.id(), d),
@@ -313,8 +255,6 @@ fn write_record(record: fastq::Record, args: &Cli, read_len: usize) -> bool {
         unsafe { std::str::from_utf8_unchecked(seq_slice) },
         unsafe { std::str::from_utf8_unchecked(qual_slice) }
     );
-    
-    true  // Indicate that the read was successfully written
 }
 
 /// This function calculates the average quality of a read, and does this correctly
@@ -341,6 +281,22 @@ fn setup_contamination_filter(contam_fasta: &str, threads: &usize) -> Arc<Aligne
         .with_index(contam_fasta, None)
         .expect("Unable to build index"))
 }
+
+fn is_valid_quality(record: &fastq::Record, min_qual: f64, max_qual: f64) -> bool {
+    let avg_qual = ave_qual(record.qual());
+    min_qual <= avg_qual && avg_qual <= max_qual
+}
+
+fn is_valid_length(record: &fastq::Record, min_len: usize, max_len: usize) -> bool {
+    let len = record.seq().len();
+    min_len <= len && len <= max_len
+}
+
+fn is_valid_gc_percent(record: &fastq::Record, min_gc_p: f64, max_gc_p: f64) -> bool {
+    let gc_percent = cal_gc(&record.seq());
+    min_gc_p <= gc_percent && gc_percent <= max_gc_p
+}
+
 
 // Checks if a sequence is a contaminant, and returns true if so
 // A sequence is considered a contaminant if there is an alignment of at least 90% between query and  target
@@ -397,7 +353,7 @@ fn test_filter() {
         &mut std::fs::File::open("test-data/test.fastq").unwrap(),
         Cli {
             minlength: 100,
-            maxlength: Some(100000),
+            maxlength: 100000,
             minqual: 5.0,
             maxqual: 200.0,
             trim_approach: Some(TrimApproach::FixedCrop),
@@ -408,8 +364,8 @@ fn test_filter() {
             contam: None,
             inverse: false,
             input: None,
-            mingc: 0.0,
-            maxgc: 1.0,
+            mingc: Some(0.0),
+            maxgc: Some(1.0),
         },
     );
 }
@@ -420,7 +376,7 @@ fn test_filter_with_trim_by_quality_approach() {
         &mut std::fs::File::open("test-data/test.fastq").unwrap(),
         Cli {
             minlength: 100,
-            maxlength: Some(100000),
+            maxlength: 100000,
             minqual: 5.0,
             maxqual: 200.0,
             trim_approach: Some(TrimApproach::TrimByQuality),
@@ -431,8 +387,8 @@ fn test_filter_with_trim_by_quality_approach() {
             contam: None,
             inverse: false,
             input: None,
-            mingc: 0.0,
-            maxgc: 1.0,
+            mingc: Some(0.0),
+            maxgc: Some(1.0),
         },
     );
 }
@@ -443,7 +399,7 @@ fn test_filter_with_best_subread_approach() {
         &mut std::fs::File::open("test-data/test.fastq").unwrap(),
         Cli {
             minlength: 100,
-            maxlength: Some(100000),
+            maxlength: 100000,
             minqual: 5.0,
             maxqual: 200.0,
             trim_approach: Some(TrimApproach::BestSubread),
@@ -454,8 +410,8 @@ fn test_filter_with_best_subread_approach() {
             contam: None,
             inverse: false,
             input: None,
-            mingc: 0.0,
-            maxgc: 1.0,
+            mingc: Some(0.0),
+            maxgc: Some(1.0),
         },
     );
 }
@@ -490,7 +446,7 @@ fn test_filter_with_contam() {
         &mut std::fs::File::open("test-data/test.fastq").unwrap(),
         Cli {
             minlength: 100,
-            maxlength: Some(100000),
+            maxlength: 100000,
             minqual: 5.0,
             maxqual: 100.0,
             trim_approach: Some(TrimApproach::FixedCrop),
@@ -501,8 +457,8 @@ fn test_filter_with_contam() {
             contam: Some("test-data/random_contam.fa".to_owned()),
             inverse: false,
             input: None,
-            mingc: 0.0,
-            maxgc: 1.0,
+            mingc: Some(0.0),
+            maxgc: Some(1.0),
         },
     );
 }

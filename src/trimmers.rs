@@ -9,7 +9,7 @@ use super::phred_score_to_probability;
 ///
 /// The `trim` method should return `Some((start, end))` if a valid sub-read  
 /// is identified, or `None` if the read should be discarded.
-pub trait TrimStrategy {
+pub trait TrimStrategy: Send + Sync {
     /// Performs the trimming process based on the defined strategy.
     ///
     /// Returns `Some((start, end))` with the indices of the trimmed region  
