@@ -56,16 +56,14 @@ Filtering Options:
 
       --maxlength <MAXLENGTH>
           Sets a maximum read length
-
-      --maxgc <MAXGC>
-          Filter max GC content
           
-          [default: 1]
+          [default: INF]
 
       --mingc <MINGC>
           Filter min GC content
-          
-          [default: 0]
+
+      --maxgc <MAXGC>
+          Filter max GC content
 
   -c, --contam <CONTAM>
           Filter contaminants against a fasta

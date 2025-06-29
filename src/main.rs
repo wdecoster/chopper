@@ -50,7 +50,6 @@ struct Cli {
 
     /// Sets a maximum read length
     #[arg(long, value_parser = parse_usize_or_inf, default_value = "INF", help_heading = "Filtering Options")]
-    // #[arg(long, value_parser, default_value_t = usize::MAX, help_heading = "Filtering Options")]
     maxlength: usize,
 
     /// Filter min GC content
