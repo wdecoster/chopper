@@ -69,7 +69,7 @@ struct Cli {
     trim_approach: Option<TrimApproach>,
 
     /// Set the minimum quality score (Q-score) threshold for trimming low-quality bases from read ends.
-    /// Required when using the `trim-by-quality` or `best-subread` trimming approaches.
+    /// Required when using the `trim-by-quality` or `best-read-segment` trimming approaches.
     #[arg(long, value_parser, help_heading = "Trimming Options")]
     cutoff: Option<u8>,
 
@@ -104,9 +104,9 @@ enum TrimApproach {
     /// Trim low-quality bases from the ends of the read until reaching
     /// a base with quality ≥ --cutoff.
     TrimByQuality,
-    /// Extract the highest-quality subread based on --cutoff, trimming
+    /// Extract the highest-quality read segment based on --cutoff, trimming
     /// low-quality bases from both ends.
-    BestSubread
+    BestReadSegment
 }
 
 fn is_file(pathname: &str) -> Result<(), String> {
@@ -149,21 +149,21 @@ fn build_trimming_approach(args: &Cli) -> Option<Arc<dyn TrimStrategy>> {
             },
             TrimApproach::TrimByQuality => {
                 if let Some(cutoff)= args.cutoff {
-                    Some(Arc::new(TrimByQualitytrategy::new(cutoff)))
+                    Some(Arc::new(TrimByQualityStrategy::new(cutoff)))
                 } else {
                     eprintln!(
-                        "Error: When using the 'trim-by-quality' trimming approache, the --cutoff parameter must be set."
+                        "Error: When using the 'trim-by-quality' trimming approach, the --cutoff parameter must be set."
                     );
                     std::process::exit(1);
                 }
 
             },
-            TrimApproach::BestSubread => {
+            TrimApproach::BestReadSegment => {
                 if let Some(cutoff) = args.cutoff {
                     Some(Arc::new(HighestQualityTrimStrategy::new(phred_score_to_probability(cutoff + 33))))
                 } else {
                     eprintln!(
-                        "Error: When using the 'best-subread' trimming approache, the --cutoff parameter must be set."
+                        "Error: When using the 'best-read-segment' trimming approach, the --cutoff parameter must be set."
                     );
                     std::process::exit(1);
                 }
@@ -393,7 +393,7 @@ fn test_filter_with_trim_by_quality_approach() {
 }
 
 #[test]
-fn test_filter_with_best_subread_approach() {
+fn test_filter_with_best_read_segment_approach() {
     filter(
         &mut std::fs::File::open("test-data/test.fastq").unwrap(),
         Cli {
@@ -401,7 +401,7 @@ fn test_filter_with_best_subread_approach() {
             maxlength: 100000,
             minqual: 5.0,
             maxqual: 200.0,
-            trim_approach: Some(TrimApproach::BestSubread),
+            trim_approach: Some(TrimApproach::BestReadSegment),
             cutoff: Some(10),
             headcrop: 0,
             tailcrop: 0,

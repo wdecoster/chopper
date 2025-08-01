@@ -75,10 +75,10 @@ Trimming Options:
           Possible values:
           - fixed-crop:      Remove a fixed number of bases from both ends of the read. Requires setting both --headcrop and --tailcrop
           - trim-by-quality: Trim low-quality bases from the ends of the read until reaching a base with quality ≥ --cutoff
-          - best-subread:    Extract the highest-quality subread based on --cutoff, trimming low-quality bases from both ends
+          - best-read-segment:    Extract the highest-quality read segment based on --cutoff, trimming low-quality bases from both ends
 
       --cutoff <CUTOFF>
-          Set the minimum quality score (Q-score) threshold for trimming low-quality bases from read ends. Required when using the `trim-by-quality` or `best-subread` trimming approaches
+          Set the minimum quality score (Q-score) threshold for trimming low-quality bases from read ends. Required when using the `trim-by-quality` or `best-read-segment` trimming approaches
 
       --headcrop <HEADCROP>
           Trim N bases from the start of each read. Required only when using the `fixed-crop` trimming approach

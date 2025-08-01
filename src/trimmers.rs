@@ -7,24 +7,25 @@ use super::phred_score_to_probability;
 /// according to a specific algorithm or criteria. This is useful when working  
 /// with different trimming approaches.
 ///
-/// The `trim` method should return `Some((start, end))` if a valid sub-read  
+/// The `trim` method should return `Some((start, end))` if a valid read segment
 /// is identified, or `None` if the read should be discarded.
 pub trait TrimStrategy: Send + Sync {
     /// Performs the trimming process based on the defined strategy.
     ///
     /// Returns `Some((start, end))` with the indices of the trimmed region  
-    /// if a valid sub-read is identified, or `None` if the read should be discarded.
+    /// if a valid read segment is identified, or `None` if the read should be discarded.
     fn trim(&self, record: &fastq::Record) -> Option<(usize, usize)>;
 }
 
-/// A trimming strategy that applies a modified Mott algorithm to extract the highest-quality sub-read.
+/// A trimming strategy that applies a modified Mott algorithm to extract the highest-quality read
+/// segment.
 ///
-/// This strategy identifies the sub-read with the lowest cumulative error probability,
+/// This strategy identifies the read segment with the lowest cumulative error probability,
 /// following an approach similar to Phred quality trimming. It is useful for removing
 /// low-quality bases typically found at the ends of reads.
 ///
 /// When used, it returns `Some((start, end))` with the indices of the highest-quality
-/// sub-read if one is found; otherwise, returns None.
+/// read segment if one is found; otherwise, returns None.
 pub struct HighestQualityTrimStrategy {
     cutoff: f64,
 }
@@ -73,19 +74,19 @@ impl TrimStrategy for HighestQualityTrimStrategy {
 /// This strategy trims low-quality bases from both ends of the read 
 /// until it reaches a base with a quality score ≥ `cutoff` (Q-score).
 ///
-/// Returns `Some((start, end))` with the indices of the valid subread 
+/// Returns `Some((start, end))` with the indices of the valid read segment
 /// if one is found; otherwise, returns `None`.
-pub struct TrimByQualitytrategy {
+pub struct TrimByQualityStrategy {
     cutoff: u8,
 }
 
-impl TrimByQualitytrategy {
-    pub fn new(cutoff: u8) -> TrimByQualitytrategy {
-        TrimByQualitytrategy { cutoff }
+impl TrimByQualityStrategy {
+    pub fn new(cutoff: u8) -> TrimByQualityStrategy {
+        TrimByQualityStrategy { cutoff }
     }
 }
 
-impl TrimStrategy for TrimByQualitytrategy {
+impl TrimStrategy for TrimByQualityStrategy {
     fn trim(&self, record: &fastq::Record) -> Option<(usize, usize)> {
         let read_len = record.seq().len();
         let trim_threshold = self.cutoff;
@@ -181,7 +182,7 @@ mod tests {
     }
     
     #[test]
-    fn highest_quality_sub_read_test() {
+    fn highest_quality_read_test() {
         let cases: [(f64, Option<(usize, usize)>); 6] = [
             (0.01, Some((10, 16))), // cutoff: Q20)
             (0.19952623149688797, Some((0, 20))), // cutoff: Q7
@@ -213,7 +214,7 @@ mod tests {
         let reads = get_reads();
 
         for ((cutoff, expected), read) in cases.iter().zip(reads) {
-            let trim_strategy = TrimByQualitytrategy::new(*cutoff);
+            let trim_strategy = TrimByQualityStrategy::new(*cutoff);
             assert_eq!(trim_strategy.trim(&read) , *expected);
         }
     }
