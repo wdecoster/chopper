@@ -276,7 +276,7 @@ fn ave_qual(quals: &[u8]) -> f64 {
 /// ```
 /// let phred_score = 10; // Q10
 /// let expected = 0.1; // Error probability
-/// let actual phred_score_to_probability(phred_score);
+/// let actual = phred_score_to_probability(phred_score);
 /// assert_eq!(expected, actual);
 /// ```
 fn phred_score_to_probability(phred: u8) -> f64 {
