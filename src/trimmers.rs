@@ -130,7 +130,7 @@ impl FixedCropStrategy {
 
 impl TrimStrategy for FixedCropStrategy {
     fn trim(&self, record: &fastq::Record) -> Option<(usize, usize)> {
-        if record.seq().len() - self.tail_crop <= self.head_crop {
+        if record.seq().len().saturating_sub(self.tail_crop) <= self.head_crop {
             return None;
         }
         Some((self.head_crop, record.seq().len() - self.tail_crop))
@@ -225,9 +225,9 @@ mod tests {
     fn fixed_crop_strategy_test() {
         let cases: [(usize, usize, Option<(usize, usize)>); 6] = [
             (5, 3, Some((5, 17))),
-            (4, 4, Some((4, 16))),
+            (30, 4, None),
             (1, 1, Some((1, 19))),
-            (15, 15, None),
+            (15, 30, None),
             (19, 0, Some((19,20))),
             (0, 19, Some((0,1)))
         ];
