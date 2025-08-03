@@ -160,7 +160,7 @@ fn build_trimming_approach(args: &Cli) -> Option<Arc<dyn TrimStrategy>> {
             },
             TrimApproach::BestReadSegment => {
                 if let Some(cutoff) = args.cutoff {
-                    Some(Arc::new(HighestQualityTrimStrategy::new(phred_score_to_probability(cutoff + 33))))
+                    Some(Arc::new(HighestQualityTrimStrategy::new(phred_score_to_probability(cutoff))))
                 } else {
                     eprintln!(
                         "Error: When using the 'best-read-segment' trimming approach, the --cutoff parameter must be set."
@@ -261,15 +261,26 @@ fn write_record(record: &fastq::Record, start_pos: usize, end_pos: usize) {
 /// and then divided by the number of bases/scores and converted to Phred again -10*log10(average)
 fn ave_qual(quals: &[u8]) -> f64 {
     let probability_sum = quals.iter()
-        .fold(0.0, |sum, &q| sum + phred_score_to_probability(q));
+        // The FASTQ Phred quality score must be converted from its ASCII representation
+        // before calling phred_score_to_probability
+        .fold(0.0, |sum, &q| sum + phred_score_to_probability(q - 33));
     
     (probability_sum / quals.len() as f64).log10() * -10.0
 }
 
-/// This function convert a Phred score to a probability
-/// using the formula: 10^(-q/10)
+/// This function converts a Phred quality score into an
+/// error probability using the formula: 10^(-q/10)
+/// 
+/// # Example
+///
+/// ```
+/// let phred_score = 10; // Q10
+/// let expected = 0.1; // Error probability
+/// let actual phred_score_to_probability(phred_score);
+/// assert_eq!(expected, actual);
+/// ```
 fn phred_score_to_probability(phred: u8) -> f64 {
-    10_f64.powf(((phred -33) as f64) / -10.0)
+    10_f64.powf((phred as f64) / -10.0)
 }
 
 fn setup_contamination_filter(contam_fasta: &str, threads: &usize) -> Arc<Aligner<Built>> {
@@ -507,10 +518,10 @@ fn test_quals() {
 #[test]
 fn phred_score_to_probability_test() {
     let cases: [(u8, f64); 4] = [
-        (20 + 33, 0.01), // Q20
-        (30 + 33, 0.001), // Q30
-        (15 + 33, 0.03162277660168379), // Q15
-        (25 + 33, 0.0031622776601683794), // Q25
+        (20, 0.01), // Q20
+        (30, 0.001), // Q30
+        (15, 0.03162277660168379), // Q15
+        (25, 0.0031622776601683794), // Q25
     ];
 
     for (phred, prob) in cases {

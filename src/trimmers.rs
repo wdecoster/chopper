@@ -46,7 +46,9 @@ impl TrimStrategy for HighestQualityTrimStrategy {
         let mut current_start = 0;
         let mut current_cumulative_error = -1.0;
         for (i, phred_qual) in record.qual().iter().enumerate() {
-            let prob_error = self.cutoff - phred_score_to_probability(*phred_qual);
+            // The FASTQ Phred quality score must be converted from its ASCII representation
+            // before calling phred_score_to_probability
+            let prob_error = self.cutoff - phred_score_to_probability(*phred_qual - 33);
             if current_cumulative_error < 0.0 {
                 current_cumulative_error = 0.0;
                 current_start = i;
