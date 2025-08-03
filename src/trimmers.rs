@@ -116,7 +116,7 @@ impl TrimStrategy for TrimByQualityStrategy {
     }
 }
 
-/// This strategy remove a fixed number of bases from both ends of the read.
+/// This strategy removes a fixed number of bases from both ends of the read.
 pub struct FixedCropStrategy {
     head_crop: usize,
     tail_crop: usize,
