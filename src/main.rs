@@ -6,11 +6,14 @@ use std::error::Error;
 use std::io::Read;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::mpsc::Sender;
+use std::sync::{mpsc, Arc};
 
+use records::WritableRecord;
 use trimmers::*;
 use utils::file_reader;
 
+mod records;
 mod trimmers;
 mod utils;
 
@@ -192,69 +195,75 @@ where
     let total_reads_ = Arc::new(AtomicUsize::new(0));
     let output_reads_ = Arc::new(AtomicUsize::new(0));
 
-    fastq::Reader::new(input)
-        .records()
-        .par_bridge()
-        .for_each(|record| {
-            let record = record.expect("ERROR: problem parsing fastq record");
-            total_reads_.fetch_add(1, Ordering::SeqCst);
+    let (sender, receiver): (Sender<WritableRecord>, _) = mpsc::channel();
 
-            if record.is_empty() {
-                return;
-            }
-
-            let valid_qual = is_valid_quality(&record, args.minqual, args.maxqual);
-            let valid_len = is_valid_length(&record, args.minlength, args.maxlength);
-
-            // If a GC content filter is set, validate the GC content; otherwise, assume it is valid.
-            let valid_gc_p = if args.mingc.is_some() || args.maxgc.is_some() {
-                is_valid_gc_percent(&record, args.mingc.unwrap_or(0.0), args.maxgc.unwrap_or(1.0))
-            } else { true };
-
-            // If a contaminants filter is set, validate the reads; otherwise, assume it is valid
-            let is_not_contam = if let Some(ref aligner) = aligner_option {
-                !is_contamination(&record.seq(), aligner)
-            } else { true };
-
-            if (valid_gc_p && valid_len && valid_qual && is_not_contam) ^ args.inverse {
-                let pos_option = if let Some(ref trimmer) = trimmer_strategy {
-                    trimmer.trim(&record)
-                } else {
-                    Some((0, record.seq().len()))
-                };
-
-                if let Some((start, end)) = pos_option {
-                    write_record(&record, start, end);
-                    output_reads_.fetch_add(1, Ordering::SeqCst);
-                }
+    rayon::scope(|s| {
+        s.spawn(move |_| {
+            while let Ok(writable_record) = receiver.recv() {
+                writable_record.write_record();
             }
         });
 
+        s.spawn(|_| {
+            fastq::Reader::new(input).records()
+                .par_bridge()
+                .for_each(|record| {
+                    let record = record.expect("ERROR: problem parsing fastq record");
+                    total_reads_.fetch_add(1, Ordering::SeqCst);
+
+                    if record.is_empty() {
+                        return;
+                    }
+
+                    let valid_qual = is_valid_quality(&record, args.minqual, args.maxqual);
+                    let valid_len = is_valid_length(&record, args.minlength, args.maxlength);
+
+                    // If a GC content filter is set, validate the GC content; otherwise, assume it is valid.
+                    let valid_gc_p = if args.mingc.is_some() || args.maxgc.is_some() {
+                        is_valid_gc_percent(&record, args.mingc.unwrap_or(0.0), args.maxgc.unwrap_or(1.0))
+                    } else { true };
+
+                    // If a contaminants filter is set, validate the reads; otherwise, assume it is valid
+                    let is_not_contam = if let Some(ref aligner) = aligner_option {
+                        !is_contamination(&record.seq(), aligner)
+                    } else { true };
+
+                    if (valid_gc_p && valid_len && valid_qual && is_not_contam) ^ args.inverse {
+                        let pos_option = if let Some(ref trimmer) = trimmer_strategy {
+                            trimmer.trim(&record)
+                        } else {
+                            Some((0, record.seq().len()))
+                        };
+
+                        if let Some((start, end)) = pos_option {
+                            let writable_record = WritableRecord::new(
+                                record,
+                                start,
+                                end,
+                            );
+
+                            // It's not necessary to handle this, because the receiver remains pending
+                            // until the last record has been processed.
+                            let _ = sender.send(writable_record);
+
+                            // write_record(&record, start, end);
+                            output_reads_.fetch_add(1, Ordering::SeqCst);
+                        }
+                    }
+                });
+
+            // Drop the sender to signal that no more fastq::Records will be sent
+            // and allow the receiver to finish processing the last record.
+            drop(sender);
+        });
+    });
+
+    
     let output_reads = output_reads_.load(Ordering::SeqCst);
     let total_reads = total_reads_.load(Ordering::SeqCst);
     eprintln!("Kept {output_reads} reads out of {total_reads} reads");
 }
 
-/// Write a record to stdout
-fn write_record(record: &fastq::Record, start_pos: usize, end_pos: usize) {
-    // Use a single formatted string with one allocation for the header
-    let header = match record.desc() {
-        Some(d) => format!("@{} {}", record.id(), d),
-        None => format!("@{}", record.id()),
-    };
-    
-    // Apply the trimming to both sequence and quality data
-    let seq_slice = &record.seq()[start_pos..end_pos];
-    let qual_slice = &record.qual()[start_pos..end_pos];
-    
-    // Use a single print to minimize syscalls
-    println!(
-        "{}\n{}\n+\n{}",
-        header,
-        unsafe { std::str::from_utf8_unchecked(seq_slice) },
-        unsafe { std::str::from_utf8_unchecked(qual_slice) }
-    );
-}
 
 /// This function calculates the average quality of a read, and does this correctly
 /// First the Phred scores are converted to probabilities using `phred_quality_to_probability` and summed
