@@ -3,7 +3,7 @@ use clap::{ Parser, ValueEnum};
 use minimap2::*;
 use rayon::prelude::*;
 use std::error::Error;
-use std::io::Read;
+use std::io::{BufWriter, Read, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
@@ -194,14 +194,24 @@ where
     
     let total_reads_ = Arc::new(AtomicUsize::new(0));
     let output_reads_ = Arc::new(AtomicUsize::new(0));
+    let output_reads_2 = Arc::clone(&output_reads_);
 
     let (sender, receiver): (Sender<WritableRecord>, _) = mpsc::channel();
 
     rayon::scope(|s| {
         s.spawn(move |_| {
+            let mut read_counter: usize = 0;
+            let stdout = std::io::stdout();
+            let mut writter = BufWriter::new(stdout.lock());
+
             while let Ok(writable_record) = receiver.recv() {
-                writable_record.write_record();
+                let _ = writable_record.write_on_buffer(&mut writter);
+
+                read_counter += 1;
             }
+
+            writter.flush().unwrap();
+            output_reads_2.fetch_add(read_counter, Ordering::Relaxed);
         });
 
         s.spawn(|_| {
@@ -209,7 +219,7 @@ where
                 .par_bridge()
                 .for_each(|record| {
                     let record = record.expect("ERROR: problem parsing fastq record");
-                    total_reads_.fetch_add(1, Ordering::SeqCst);
+                    total_reads_.fetch_add(1, Ordering::Relaxed);
 
                     if record.is_empty() {
                         return;
@@ -245,9 +255,6 @@ where
                             // It's not necessary to handle this, because the receiver remains pending
                             // until the last record has been processed.
                             let _ = sender.send(writable_record);
-
-                            // write_record(&record, start, end);
-                            output_reads_.fetch_add(1, Ordering::SeqCst);
                         }
                     }
                 });
