@@ -40,7 +40,7 @@ impl WritableRecord {
         let qual_slice = &record.qual()[start..end];
         
         format!(
-            "{}\n{}\n+\n{}",
+            "{}\n{}\n+\n{}\n",
             header,
             unsafe { std::str::from_utf8_unchecked(seq_slice) },
             unsafe { std::str::from_utf8_unchecked(qual_slice) }
