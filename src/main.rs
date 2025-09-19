@@ -25,10 +25,10 @@ fn parse_usize_or_inf(s: &str) -> Result<usize, String> {
 fn parse_gc_value(s: &str) -> Result<f64, String> {
     let f: f64 = s.parse()
         .map_err(|e| format!("Invalid number: {e}"))?;
-    if 0.0 <= f && f <= 1.0 {
+    if (0.0..=1.0).contains(&f) {
         Ok(f)
     } else {
-        Err(format!("Value out of range. Expected a value from 0 to 1."))
+        Err("Value out of range. Expected a value from 0 to 1.".to_string())
     }
 }
 
@@ -106,7 +106,10 @@ enum TrimApproach {
     TrimByQuality,
     /// Extract the highest-quality read segment based on --cutoff, trimming
     /// low-quality bases from both ends.
-    BestReadSegment
+    BestReadSegment,
+    /// Split reads by low-quality segments and output high-quality parts
+    /// on the left and right, provided they pass the length filter.
+    SplitByLowQuality
 }
 
 fn is_file(pathname: &str) -> Result<(), String> {
@@ -167,6 +170,16 @@ fn build_trimming_approach(args: &Cli) -> Option<Arc<dyn TrimStrategy>> {
                     );
                     std::process::exit(1);
                 }
+            },
+            TrimApproach::SplitByLowQuality => {
+                if let Some(cutoff) = args.cutoff {
+                    Some(Arc::new(SplitByLowQualityStrategy::new(cutoff, args.minlength)))
+                } else {
+                    eprintln!(
+                        "Error: When using the 'split-by-low-quality' trimming approach, the --cutoff parameter must be set."
+                    );
+                    std::process::exit(1);
+                }
             }
         }
     } else {
@@ -217,15 +230,18 @@ where
             } else { true };
 
             if (valid_gc_p && valid_len && valid_qual && is_not_contam) ^ args.inverse {
-                let pos_option = if let Some(ref trimmer) = trimmer_strategy {
+                let segments = if let Some(ref trimmer) = trimmer_strategy {
                     trimmer.trim(&record)
                 } else {
-                    Some((0, record.seq().len()))
+                    vec![(0, record.seq().len())]
                 };
 
-                if let Some((start, end)) = pos_option {
-                    write_record(&record, start, end);
-                    output_reads_.fetch_add(1, Ordering::SeqCst);
+                for (segment_idx, (start, end)) in segments.iter().enumerate() {
+                    // Check if the trimmed segment meets the minimum length requirement
+                    if end - start >= args.minlength {
+                        write_record(&record, *start, *end, segments.len(), segment_idx);
+                        output_reads_.fetch_add(1, Ordering::SeqCst);
+                    }
                 }
             }
         });
@@ -236,11 +252,20 @@ where
 }
 
 /// Write a record to stdout
-fn write_record(record: &fastq::Record, start_pos: usize, end_pos: usize) {
+fn write_record(record: &fastq::Record, start_pos: usize, end_pos: usize, total_segments: usize, segment_idx: usize) {
     // Use a single formatted string with one allocation for the header
-    let header = match record.desc() {
-        Some(d) => format!("@{} {}", record.id(), d),
-        None => format!("@{}", record.id()),
+    let header = if total_segments > 1 {
+        // Add suffix for multiple segments
+        match record.desc() {
+            Some(d) => format!("@{}_segment_{} {}", record.id(), segment_idx + 1, d),
+            None => format!("@{}_segment_{}", record.id(), segment_idx + 1),
+        }
+    } else {
+        // Single segment, use original header
+        match record.desc() {
+            Some(d) => format!("@{} {}", record.id(), d),
+            None => format!("@{}", record.id()),
+        }
     };
     
     // Apply the trimming to both sequence and quality data
@@ -303,7 +328,7 @@ fn is_valid_length(record: &fastq::Record, min_len: usize, max_len: usize) -> bo
 }
 
 fn is_valid_gc_percent(record: &fastq::Record, min_gc_p: f64, max_gc_p: f64) -> bool {
-    let gc_percent = cal_gc(&record.seq());
+    let gc_percent = cal_gc(record.seq());
     min_gc_p <= gc_percent && gc_percent <= max_gc_p
 }
 

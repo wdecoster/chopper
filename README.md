@@ -4,13 +4,15 @@ Rust implementation of [NanoFilt](https://github.com/wdecoster/nanofilt)+[NanoLy
 
 Filtering is based on average read quality, minimum or maximum read length, and GC content percentage.
 
-On the other hand, trimming is performed using one of three approaches:
+On the other hand, trimming is performed using one of four approaches:
 
 * Fixed cropping (head crop at the start of the read and tail crop at the end),
 
 * Quality-based trimming using a threshold,
 
-* Extracting the highest-quality sub-read based on a quality score.
+* Extracting the highest-quality sub-read based on a quality score,
+
+* Splitting reads by low-quality segments and outputting high-quality parts.
 
 Reads that pass the filters are printed to standard output (STDOUT).
 
@@ -76,9 +78,10 @@ Trimming Options:
           - fixed-crop:      Remove a fixed number of bases from both ends of the read. Requires setting both --headcrop and --tailcrop
           - trim-by-quality: Trim low-quality bases from the ends of the read until reaching a base with quality ≥ --cutoff
           - best-read-segment:    Extract the highest-quality read segment based on --cutoff, trimming low-quality bases from both ends
+          - split-by-low-quality: Split reads by low-quality segments and output high-quality parts on the left and right, provided they pass the length filter
 
       --cutoff <CUTOFF>
-          Set the minimum quality score (Q-score) threshold for trimming low-quality bases from read ends. Required when using the `trim-by-quality` or `best-read-segment` trimming approaches
+          Set the minimum quality score (Q-score) threshold for trimming low-quality bases from read ends. Required when using the `trim-by-quality`, `best-read-segment`, or `split-by-low-quality` trimming approaches
 
       --headcrop <HEADCROP>
           Trim N bases from the start of each read. Required only when using the `fixed-crop` trimming approach
@@ -103,12 +106,21 @@ Setup Options:
           Output the opposite of the normal results
 ```
 
-## Examples:
+## Examples
 
 ```bash
 gunzip -c reads.fastq.gz | chopper -q 10 -l 500 | gzip > filtered_reads.fastq.gz
 chopper -q 10 -l 500 -i reads.fastq > filtered_reads.fastq
 chopper -q 10 -l 500 -i reads.fastq.gz | gzip > filtered_reads.fastq.gz
+
+# Trim low-quality bases from read ends
+chopper --trim-approach trim-by-quality --cutoff 15 -i reads.fastq > trimmed_reads.fastq
+
+# Extract the highest-quality segment from each read
+chopper --trim-approach best-read-segment --cutoff 15 -l 100 -i reads.fastq > best_segments.fastq
+
+# Split reads by low-quality segments and output high-quality parts
+chopper --trim-approach split-by-low-quality --cutoff 15 -l 50 -i reads.fastq > split_reads.fastq
 ```
 
 ## Citation
