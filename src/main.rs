@@ -1,13 +1,13 @@
 use bio::io::fastq;
 use clap::{ Parser, ValueEnum};
+use crossbeam::channel::{Receiver, Select, Sender};
 use minimap2::*;
 use rayon::prelude::*;
 use std::error::Error;
 use std::io::{BufWriter, Read, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::Sender;
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, Mutex};
 
 use records::WritableRecord;
 use trimmers::*;
@@ -196,7 +196,8 @@ where
     let output_reads_ = Arc::new(AtomicUsize::new(0));
     let output_reads_2 = Arc::clone(&output_reads_);
 
-    let (sender, receiver): (Sender<WritableRecord>, _) = mpsc::channel();
+    let (senders, receivers) = create_channel_pool(args.threads - 1);
+    let senders = Arc::new(Mutex::new(senders));
 
     rayon::scope(|s| {
         s.spawn(move |_| {
@@ -204,10 +205,33 @@ where
             let stdout = std::io::stdout();
             let mut writter = BufWriter::new(stdout.lock());
 
-            while let Ok(writable_record) = receiver.recv() {
-                let _ = writable_record.write_on_buffer(&mut writter);
+            let mut sel = Select::new();
+            for r in &receivers {
+                sel.recv(&r);
+            }
 
-                read_counter += 1;
+            let mut current_active_channels = receivers.len();
+
+            while 0 < current_active_channels {
+                // Wait until a receive operation becomes ready and try executing it.
+                let index = sel.ready();
+                let res = receivers[index].try_recv();
+
+                match res {
+                    Ok(writable_record) => {
+                        let _ = writable_record.write_on_buffer(&mut writter);
+                        read_counter += 1;
+                    },
+                    Err(e) => {
+                        if e.is_empty() {
+                            // No messages available in the channel
+                            continue;
+                        }
+                        // Remove channel because its sender is disconnected
+                        sel.remove(index);
+                        current_active_channels -= 1;
+                    },
+                }
             }
 
             writter.flush().unwrap();
@@ -217,7 +241,16 @@ where
         s.spawn(|_| {
             fastq::Reader::new(input).records()
                 .par_bridge()
-                .for_each(|record| {
+                .for_each_init(|| {
+                    // Return an Option with a Sender that will be used only by one worker
+                    if let Ok(mut senders_guard) = senders.lock() {
+                        senders_guard.pop()
+                    } else {
+                        None
+                    }
+                },
+
+                |sender, record| {
                     let record = record.expect("ERROR: problem parsing fastq record");
                     total_reads_.fetch_add(1, Ordering::Relaxed);
 
@@ -252,16 +285,17 @@ where
                                 end,
                             );
 
-                            // It's not necessary to handle this, because the receiver remains pending
-                            // until the last record has been processed.
-                            let _ = sender.send(writable_record);
+                            if let Some(ref s) = sender {
+                                // It's not necessary to handle this, because the receiver remains pending
+                                // until the last record has been processed.
+                                let _ = s.send(writable_record);
+                            } else {
+                                // This print is for debugging purposes (should not occur)
+                                eprintln!("Error: failed to send the read for writting");
+                            }
                         }
                     }
                 });
-
-            // Drop the sender to signal that no more fastq::Records will be sent
-            // and allow the receiver to finish processing the last record.
-            drop(sender);
         });
     });
 
@@ -271,6 +305,20 @@ where
     eprintln!("Kept {output_reads} reads out of {total_reads} reads");
 }
 
+/// Returns a pair of vectors containing the senders and receivers of `n_channels`
+/// unbounded channels.
+fn create_channel_pool(n_channels: usize) -> (Vec<Sender<WritableRecord>>, Vec<Receiver<WritableRecord>>) {
+    let mut senders = Vec::with_capacity(n_channels);
+    let mut receivers = Vec::with_capacity(n_channels);
+
+    for _ in 0..n_channels {
+        let (tx, rx) = crossbeam::channel::unbounded();
+        senders.push(tx);
+        receivers.push(rx);
+    }
+
+    (senders, receivers)
+}
 
 /// This function calculates the average quality of a read, and does this correctly
 /// First the Phred scores are converted to probabilities using `phred_quality_to_probability` and summed
