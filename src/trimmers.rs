@@ -352,7 +352,7 @@ mod tests {
     #[test]
     fn split_by_low_quality_edge_cases_test() {
         // Test empty read
-        let empty_read = fastq::Record::with_attrs(&"empty", None, b"", b"");
+        let empty_read = fastq::Record::with_attrs("empty", None, b"", b"");
         let trim_strategy = SplitByLowQualityStrategy::new(10, 1);
         assert_eq!(trim_strategy.trim(&empty_read), vec![]);
 
