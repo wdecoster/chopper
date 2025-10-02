@@ -191,7 +191,70 @@ where
     } else { None };
 
     let trimmer_strategy = build_trimming_approach(&args);
-    
+
+    match args.threads {
+        1 => sequential_filter(input, &args, &aligner_option, &trimmer_strategy),
+        _ => parallel_filter(input, &args, &aligner_option, &trimmer_strategy)
+    }
+}
+
+/// Applies sequential filtering to the FASTQ records from the given `input`.
+///
+/// Each record is validated against filtering criteria such as:
+/// - Length
+/// - Quality
+/// - GC content
+/// - Contamination (if an `aligner_option` is provided)
+///
+/// If the record passes the filters, an optional trimming strategy can be applied
+/// (`trimmer_strategy`). Valid records are then written to the standard output.
+fn sequential_filter<T>(input: &mut T, args: &Cli, aligner_option: &Option<Arc<Aligner<Built>>>, trimmer_strategy: &Option<Arc<dyn TrimStrategy + 'static>>) 
+where
+    T: Read + std::marker::Send,
+{
+    let mut total_reads: usize = 0;
+    let mut output_reads: usize = 0;
+
+    let stdout = std::io::stdout();
+    let mut writer = BufWriter::new(stdout.lock());
+
+    fastq::Reader::new(input).records()
+        .into_iter()
+        .for_each(|record| {
+            let record = record.expect("ERROR: problem parsing fastq record");
+            total_reads = total_reads.saturating_add(1);
+
+            if let Some((start, end)) = get_valid_segment(&record, &args, &aligner_option, &trimmer_strategy) {
+                output_reads = output_reads.saturating_add(1);
+
+                let writable_record = WritableRecord::new(
+                    record,
+                    start,
+                    end,
+                );
+
+                let _ = writable_record.write_on_buffer(&mut writer);
+            }
+        });
+
+    writer.flush().unwrap();
+    eprintln!("Kept {output_reads} reads out of {total_reads} reads");
+}
+
+/// Applies parallel filtering to the FASTQ records from the given `input`.
+///
+/// Each record is validated against filtering criteria such as:
+/// - Length
+/// - Quality
+/// - GC content
+/// - Contamination (if an `aligner_option` is provided)
+///
+/// If the record passes the filters, an optional trimming strategy can be applied
+/// (`trimmer_strategy`). Valid records are then written to the standard output.
+fn parallel_filter<T>(input: &mut T, args: &Cli, aligner_option: &Option<Arc<Aligner<Built>>>, trimmer_strategy: &Option<Arc<dyn TrimStrategy + 'static>>) 
+where
+    T: Read + std::marker::Send,
+{
     let total_reads_ = Arc::new(AtomicUsize::new(0));
     let output_reads_ = Arc::new(AtomicUsize::new(0));
     let output_reads_2 = Arc::clone(&output_reads_);
@@ -203,7 +266,7 @@ where
         s.spawn(move |_| {
             let mut read_counter: usize = 0;
             let stdout = std::io::stdout();
-            let mut writter = BufWriter::new(stdout.lock());
+            let mut writer = BufWriter::new(stdout.lock());
 
             let mut sel = Select::new();
             for r in &receivers {
@@ -219,7 +282,7 @@ where
 
                 match res {
                     Ok(writable_record) => {
-                        let _ = writable_record.write_on_buffer(&mut writter);
+                        let _ = writable_record.write_on_buffer(&mut writer);
                         read_counter += 1;
                     },
                     Err(e) => {
@@ -234,7 +297,7 @@ where
                 }
             }
 
-            writter.flush().unwrap();
+            writer.flush().unwrap();
             output_reads_2.fetch_add(read_counter, Ordering::Relaxed);
         });
 
@@ -253,56 +316,67 @@ where
                 |sender, record| {
                     let record = record.expect("ERROR: problem parsing fastq record");
                     total_reads_.fetch_add(1, Ordering::Relaxed);
+                    
+                    if let Some((start, end)) = get_valid_segment(&record, &args, &aligner_option, &trimmer_strategy) {
+                        let writable_record = WritableRecord::new(
+                            record,
+                            start,
+                            end,
+                        );
 
-                    if record.is_empty() {
-                        return;
-                    }
-
-                    let valid_qual = is_valid_quality(&record, args.minqual, args.maxqual);
-                    let valid_len = is_valid_length(&record, args.minlength, args.maxlength);
-
-                    // If a GC content filter is set, validate the GC content; otherwise, assume it is valid.
-                    let valid_gc_p = if args.mingc.is_some() || args.maxgc.is_some() {
-                        is_valid_gc_percent(&record, args.mingc.unwrap_or(0.0), args.maxgc.unwrap_or(1.0))
-                    } else { true };
-
-                    // If a contaminants filter is set, validate the reads; otherwise, assume it is valid
-                    let is_not_contam = if let Some(ref aligner) = aligner_option {
-                        !is_contamination(&record.seq(), aligner)
-                    } else { true };
-
-                    if (valid_gc_p && valid_len && valid_qual && is_not_contam) ^ args.inverse {
-                        let pos_option = if let Some(ref trimmer) = trimmer_strategy {
-                            trimmer.trim(&record)
+                        if let Some(ref s) = sender {
+                            // It's not necessary to handle this, because the receiver remains pending
+                            // until the last record has been processed.
+                            let _ = s.send(writable_record);
                         } else {
-                            Some((0, record.seq().len()))
-                        };
-
-                        if let Some((start, end)) = pos_option {
-                            let writable_record = WritableRecord::new(
-                                record,
-                                start,
-                                end,
-                            );
-
-                            if let Some(ref s) = sender {
-                                // It's not necessary to handle this, because the receiver remains pending
-                                // until the last record has been processed.
-                                let _ = s.send(writable_record);
-                            } else {
-                                // This print is for debugging purposes (should not occur)
-                                eprintln!("Error: failed to send the read for writting");
-                            }
+                            // This case should not happen unless the number of receivers is set to be less than the number of threads.
+                            // (see: https://users.rust-lang.org/t/what-is-the-expected-behavior-of-for-each-init-with-par-bridge-in-rayon/134136/5?u=millarcd)
+                            eprintln!("Error: failed to send the read for writing");
                         }
                     }
                 });
-        });
+            });
     });
 
     
     let output_reads = output_reads_.load(Ordering::SeqCst);
     let total_reads = total_reads_.load(Ordering::SeqCst);
     eprintln!("Kept {output_reads} reads out of {total_reads} reads");
+}
+
+/// Analyzes the quality of a FASTQ record and determines whether it meets the filtering
+/// criteria defined by the input parameters.
+///
+/// # Returns
+/// - `Some((usize, usize))`: The valid segment of the read (start, end indices) if the record passes all filters.
+/// - `None`: If the record does not meet the filtering criteria.
+fn get_valid_segment(record: &fastq::Record, args: &Cli, aligner_option: &Option<Arc<Aligner<Built>>>, trimmer_strategy: &Option<Arc<dyn TrimStrategy + 'static>>) -> Option<(usize, usize)> {
+    if record.is_empty() {
+        return None;
+    }
+
+    let valid_qual = is_valid_quality(&record, args.minqual, args.maxqual);
+    let valid_len = is_valid_length(&record, args.minlength, args.maxlength);
+
+    // If a GC content filter is set, validate the GC content; otherwise, assume it is valid.
+    let valid_gc_p = if args.mingc.is_some() || args.maxgc.is_some() {
+        is_valid_gc_percent(&record, args.mingc.unwrap_or(0.0), args.maxgc.unwrap_or(1.0))
+    } else { true };
+
+    // If a contaminants filter is set, validate the reads; otherwise, assume it is valid
+    let is_not_contam = if let Some(ref aligner) = aligner_option {
+        !is_contamination(&record.seq(), aligner)
+    } else { true };
+
+    if (valid_gc_p && valid_len && valid_qual && is_not_contam) ^ args.inverse {
+        if let Some(ref trimmer) = trimmer_strategy {
+            trimmer.trim(&record)
+        } else {
+            Some((0, record.seq().len()))
+        }
+    } else {
+        None
+    }
 }
 
 /// Returns a pair of vectors containing the senders and receivers of `n_channels`
