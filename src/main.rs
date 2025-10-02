@@ -1,6 +1,6 @@
 use bio::io::fastq;
 use clap::{ Parser, ValueEnum};
-use crossbeam::channel::{Receiver, Select, Sender};
+use crossbeam_channel::{Receiver, Sender, Select};
 use minimap2::*;
 use rayon::prelude::*;
 use std::error::Error;
@@ -268,6 +268,7 @@ where
             let stdout = std::io::stdout();
             let mut writer = BufWriter::new(stdout.lock());
 
+            
             let mut sel = Select::new();
             for r in &receivers {
                 sel.recv(&r);
@@ -386,7 +387,7 @@ fn create_channel_pool(n_channels: usize) -> (Vec<Sender<WritableRecord>>, Vec<R
     let mut receivers = Vec::with_capacity(n_channels);
 
     for _ in 0..n_channels {
-        let (tx, rx) = crossbeam::channel::unbounded();
+        let (tx, rx) = crossbeam_channel::unbounded();
         senders.push(tx);
         receivers.push(rx);
     }

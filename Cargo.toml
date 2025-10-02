@@ -11,7 +11,7 @@ description = "A tool to filter fastq files"
 [dependencies]
 bio = "2.2.0"
 clap = { version = "4.5.37", features = ["derive"] }
-crossbeam = "0.8"
+crossbeam-channel = "0.5"
 rayon = "1.7.0"
 approx = "0.5.1"
 minimap2 = "0.1.23+minimap2.2.28"
