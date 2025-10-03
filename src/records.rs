@@ -14,8 +14,8 @@ impl WritableRecord {
     /// * `record` - Original FASTQ record.
     /// * `start`  - Start index (inclusive).
     /// * `end`    - End index (exclusive).
-    pub fn new(record: fastq::Record, start: usize, end: usize) -> Self {
-        let record = WritableRecord::record_to_string(&record, start, end);
+    pub fn new(record: &fastq::Record, start: usize, end: usize, total_segments: usize, segment_idx: usize) -> Self {
+        let record = WritableRecord::record_to_string(&record, start, end, total_segments, segment_idx);
         
         WritableRecord {
             record,
@@ -28,11 +28,20 @@ impl WritableRecord {
     }
 
     /// Converts a `fastq::record` into a valid FASTQ string within the range `[start..end]`.
-    fn record_to_string(record: &fastq::Record, start: usize, end: usize) -> String {
+    fn record_to_string(record: &fastq::Record, start: usize, end: usize, total_segments: usize, segment_idx: usize) -> String {
         // Use a single formatted string with one allocation for the header
-        let header = match record.desc() {
-            Some(d) => format!("@{} {}", record.id(), d),
-            None => format!("@{}", record.id()),
+        let header = if total_segments > 1 {
+            // Add suffix for multiple segments
+            match record.desc() {
+                Some(d) => format!("@{}_segment_{} {}", record.id(), segment_idx + 1, d),
+                None => format!("@{}_segment_{}", record.id(), segment_idx + 1),
+            }
+        } else {
+            // Single segment, use original header
+            match record.desc() {
+                Some(d) => format!("@{} {}", record.id(), d),
+                None => format!("@{}", record.id()),
+            }
         };
         
         // Apply the trimming to both sequence and quality data
