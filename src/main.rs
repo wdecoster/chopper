@@ -381,7 +381,11 @@ fn get_valid_segment(record: &fastq::Record, args: &Cli, aligner_option: &Option
 
     if (valid_gc_p && valid_len && valid_qual && is_not_contam) ^ args.inverse {
         if let Some(ref trimmer) = trimmer_strategy {
-            trimmer.trim(&record)
+            trimmer.trim(&record).into_iter()
+                // Verify minimum length for each segment
+                .filter(|&(start, end)| {
+                    args.minlength <= end - start
+                }).collect()
         } else {
             vec![(0, record.seq().len())]
         }
