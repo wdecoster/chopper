@@ -488,200 +488,205 @@ fn cal_gc(readseq: &[u8]) -> f64 {
     (gc_count as f64) / (readseq.len() as f64)
 }
 
-#[test]
-fn test_ave_qual() {
-    // Original test values need to be adjusted by adding 33 to each value
-    assert_eq!(ave_qual(&[10+33]), 10.0);
-    assert!((ave_qual(&[10+33, 11+33, 12+33]) - 10.923583702678473) < 0.00001);
-    assert!((ave_qual(&[10+33, 11+33, 12+33, 20+33, 30+33, 40+33, 50+33]) - 14.408827647036087) < 0.00001);
-    assert!(
-        (ave_qual(&[
-            17+33, 19+33, 11+33, 5+33, 3+33, 19+33, 22+33, 24+33, 20+33, 22+33, 30+33, 31+33, 32+33, 20+33, 21+33, 30+33, 28+33, 10+33, 13+33, 12+33, 18+33, 18+33,
-            18+33, 19+33, 24+33, 25+33, 35+33, 33+33, 34+33, 35+33, 34+33, 27+33, 29+33, 25+33, 21+33, 18+33, 19+33, 12+33, 14+33, 15+33, 24+33, 26+33, 24+33, 7+33,
-            12+33, 17+33, 17+33, 19+33, 17+33, 8+33, 14+33, 15+33, 13+33, 15+33, 9+33, 3+33, 4+33, 23+33, 23+33, 29+33, 23+33, 10+33, 29+33, 30+33, 31+33, 27+33, 25+33,
-            14+33, 2+33, 13+33, 19+33, 14+33, 13+33, 13+33, 3+33, 2+33, 10+33, 17+33, 19+33, 25+33, 27+33, 20+33, 19+33, 11+33, 5+33, 7+33, 8+33, 8+33, 5+33, 2+33, 10+33,
-            12+33, 16+33, 18+33, 16+33, 14+33, 12+33, 15+33, 2+33, 3+33, 11+33, 10+33, 15+33, 17+33, 17+33, 16+33, 13+33, 18+33, 26+33, 26+33, 23+33, 25+33, 23+33,
-            18+33, 16+33, 33+33, 30+33, 26+33, 26+33, 21+33, 23+33, 8+33, 8+33, 11+33, 11+33, 6+33, 14+33, 19+33, 22+33, 20+33, 20+33, 18+33, 17+33, 20+33, 23+33,
-            24+33, 28+33, 28+33, 28+33, 21+33, 20+33, 25+33, 27+33, 37+33, 28+33, 36+33, 29+33, 24+33, 27+33, 16+33, 18+33, 12+33, 8+33, 5+33, 3+33, 4+33, 6+33, 5+33,
-            4+33, 4+33, 2+33, 10+33, 12+33, 6+33, 9+33, 9+33, 15+33, 16+33, 11+33, 10+33, 8+33, 8+33, 4+33, 3+33, 5+33, 4+33, 6+33, 15+33, 10+33, 9+33, 8+33, 7+33, 12+33, 4+33,
-            5+33, 11+33, 12+33, 17+33, 13+33, 11+33, 17+33, 16+33, 4+33, 4+33, 5+33, 5+33, 12+33, 18+33, 17+33, 21+33
-        ]) - 10.017407548271677)
-            < 0.00001
-    )
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-#[ignore]
-#[test]
-fn test_filter() {
-    filter(
-        &mut std::fs::File::open("test-data/test.fastq").unwrap(),
-        Cli {
-            minlength: 100,
-            maxlength: 100000,
-            minqual: 5.0,
-            maxqual: 200.0,
-            trim_approach: Some(TrimApproach::FixedCrop),
-            cutoff: None,
-            headcrop: 10,
-            tailcrop: 10,
-            threads: 1,
-            contam: None,
-            inverse: false,
-            input: None,
-            mingc: Some(0.0),
-            maxgc: Some(1.0),
-        },
-    );
-}
+    #[test]
+    fn test_ave_qual() {
+        // Original test values need to be adjusted by adding 33 to each value
+        assert_eq!(ave_qual(&[10+33]), 10.0);
+        assert!((ave_qual(&[10+33, 11+33, 12+33]) - 10.923583702678473) < 0.00001);
+        assert!((ave_qual(&[10+33, 11+33, 12+33, 20+33, 30+33, 40+33, 50+33]) - 14.408827647036087) < 0.00001);
+        assert!(
+            (ave_qual(&[
+                17+33, 19+33, 11+33, 5+33, 3+33, 19+33, 22+33, 24+33, 20+33, 22+33, 30+33, 31+33, 32+33, 20+33, 21+33, 30+33, 28+33, 10+33, 13+33, 12+33, 18+33, 18+33,
+                18+33, 19+33, 24+33, 25+33, 35+33, 33+33, 34+33, 35+33, 34+33, 27+33, 29+33, 25+33, 21+33, 18+33, 19+33, 12+33, 14+33, 15+33, 24+33, 26+33, 24+33, 7+33,
+                12+33, 17+33, 17+33, 19+33, 17+33, 8+33, 14+33, 15+33, 13+33, 15+33, 9+33, 3+33, 4+33, 23+33, 23+33, 29+33, 23+33, 10+33, 29+33, 30+33, 31+33, 27+33, 25+33,
+                14+33, 2+33, 13+33, 19+33, 14+33, 13+33, 13+33, 3+33, 2+33, 10+33, 17+33, 19+33, 25+33, 27+33, 20+33, 19+33, 11+33, 5+33, 7+33, 8+33, 8+33, 5+33, 2+33, 10+33,
+                12+33, 16+33, 18+33, 16+33, 14+33, 12+33, 15+33, 2+33, 3+33, 11+33, 10+33, 15+33, 17+33, 17+33, 16+33, 13+33, 18+33, 26+33, 26+33, 23+33, 25+33, 23+33,
+                18+33, 16+33, 33+33, 30+33, 26+33, 26+33, 21+33, 23+33, 8+33, 8+33, 11+33, 11+33, 6+33, 14+33, 19+33, 22+33, 20+33, 20+33, 18+33, 17+33, 20+33, 23+33,
+                24+33, 28+33, 28+33, 28+33, 21+33, 20+33, 25+33, 27+33, 37+33, 28+33, 36+33, 29+33, 24+33, 27+33, 16+33, 18+33, 12+33, 8+33, 5+33, 3+33, 4+33, 6+33, 5+33,
+                4+33, 4+33, 2+33, 10+33, 12+33, 6+33, 9+33, 9+33, 15+33, 16+33, 11+33, 10+33, 8+33, 8+33, 4+33, 3+33, 5+33, 4+33, 6+33, 15+33, 10+33, 9+33, 8+33, 7+33, 12+33, 4+33,
+                5+33, 11+33, 12+33, 17+33, 13+33, 11+33, 17+33, 16+33, 4+33, 4+33, 5+33, 5+33, 12+33, 18+33, 17+33, 21+33
+            ]) - 10.017407548271677)
+                < 0.00001
+        )
+    }
 
-#[ignore]
-#[test]
-fn test_filter_with_trim_by_quality_approach() {
-    filter(
-        &mut std::fs::File::open("test-data/test.fastq").unwrap(),
-        Cli {
-            minlength: 100,
-            maxlength: 100000,
-            minqual: 5.0,
-            maxqual: 200.0,
-            trim_approach: Some(TrimApproach::TrimByQuality),
-            cutoff: Some(10),
-            headcrop: 0,
-            tailcrop: 0,
-            threads: 1,
-            contam: None,
-            inverse: false,
-            input: None,
-            mingc: Some(0.0),
-            maxgc: Some(1.0),
-        },
-    );
-}
+    #[ignore]
+    #[test]
+    fn test_filter() {
+        filter(
+            &mut std::fs::File::open("test-data/test.fastq").unwrap(),
+            Cli {
+                minlength: 100,
+                maxlength: 100000,
+                minqual: 5.0,
+                maxqual: 200.0,
+                trim_approach: Some(TrimApproach::FixedCrop),
+                cutoff: None,
+                headcrop: 10,
+                tailcrop: 10,
+                threads: 1,
+                contam: None,
+                inverse: false,
+                input: None,
+                mingc: Some(0.0),
+                maxgc: Some(1.0),
+            },
+        );
+    }
 
-#[ignore]
-#[test]
-fn test_filter_with_best_read_segment_approach() {
-    filter(
-        &mut std::fs::File::open("test-data/test.fastq").unwrap(),
-        Cli {
-            minlength: 100,
-            maxlength: 100000,
-            minqual: 5.0,
-            maxqual: 200.0,
-            trim_approach: Some(TrimApproach::BestReadSegment),
-            cutoff: Some(10),
-            headcrop: 0,
-            tailcrop: 0,
-            threads: 1,
-            contam: None,
-            inverse: false,
-            input: None,
-            mingc: Some(0.0),
-            maxgc: Some(1.0),
-        },
-    );
-}
+    #[ignore]
+    #[test]
+    fn test_filter_with_trim_by_quality_approach() {
+        filter(
+            &mut std::fs::File::open("test-data/test.fastq").unwrap(),
+            Cli {
+                minlength: 100,
+                maxlength: 100000,
+                minqual: 5.0,
+                maxqual: 200.0,
+                trim_approach: Some(TrimApproach::TrimByQuality),
+                cutoff: Some(10),
+                headcrop: 0,
+                tailcrop: 0,
+                threads: 1,
+                contam: None,
+                inverse: false,
+                input: None,
+                mingc: Some(0.0),
+                maxgc: Some(1.0),
+            },
+        );
+    }
 
-#[test]
-fn test_contam() {
-    let t: usize = 8;
-    let aligner = setup_contamination_filter("test-data/random_contam.fa", &t);
-    let rec = fastq::Reader::new(std::fs::File::open("test-data/test.fastq").unwrap())
-        .records()
-        .next()
-        .unwrap()
-        .unwrap();
-    assert!(is_contamination(&rec.seq(), &aligner));
-}
+    #[ignore]
+    #[test]
+    fn test_filter_with_best_read_segment_approach() {
+        filter(
+            &mut std::fs::File::open("test-data/test.fastq").unwrap(),
+            Cli {
+                minlength: 100,
+                maxlength: 100000,
+                minqual: 5.0,
+                maxqual: 200.0,
+                trim_approach: Some(TrimApproach::BestReadSegment),
+                cutoff: Some(10),
+                headcrop: 0,
+                tailcrop: 0,
+                threads: 1,
+                contam: None,
+                inverse: false,
+                input: None,
+                mingc: Some(0.0),
+                maxgc: Some(1.0),
+            },
+        );
+    }
 
-#[test]
-fn test_no_contam() {
-    let t: usize = 8;
-    let aligner = setup_contamination_filter("test-data/random_contam.fa", &t);
-    let rec = fastq::Reader::new(std::fs::File::open("test-data/other-test.fastq").unwrap())
-        .records()
-        .next()
-        .unwrap()
-        .unwrap();
-    assert!(!is_contamination(&rec.seq(), &aligner));
-}
+    #[test]
+    fn test_contam() {
+        let t: usize = 8;
+        let aligner = setup_contamination_filter("test-data/random_contam.fa", &t);
+        let rec = fastq::Reader::new(std::fs::File::open("test-data/test.fastq").unwrap())
+            .records()
+            .next()
+            .unwrap()
+            .unwrap();
+        assert!(is_contamination(&rec.seq(), &aligner));
+    }
 
-#[ignore]
-#[test]
-fn test_filter_with_contam() {
-    filter(
-        &mut std::fs::File::open("test-data/test.fastq").unwrap(),
-        Cli {
-            minlength: 100,
-            maxlength: 100000,
-            minqual: 5.0,
-            maxqual: 100.0,
-            trim_approach: Some(TrimApproach::FixedCrop),
-            cutoff: None,
-            headcrop: 10,
-            tailcrop: 10,
-            threads: 1,
-            contam: Some("test-data/random_contam.fa".to_owned()),
-            inverse: false,
-            input: None,
-            mingc: Some(0.0),
-            maxgc: Some(1.0),
-        },
-    );
-}
+    #[test]
+    fn test_no_contam() {
+        let t: usize = 8;
+        let aligner = setup_contamination_filter("test-data/random_contam.fa", &t);
+        let rec = fastq::Reader::new(std::fs::File::open("test-data/other-test.fastq").unwrap())
+            .records()
+            .next()
+            .unwrap()
+            .unwrap();
+        assert!(!is_contamination(&rec.seq(), &aligner));
+    }
 
-#[test]
-fn test_record_qual_len() {
-    fastq::Reader::new(std::fs::File::open("test-data/test.fastq").unwrap())
-        .records()
-        .for_each(|record| {
-            let record = record.unwrap();
-            if !record.is_empty() {
-                let read_len = record.seq().len();
-                let quals = record.qual();
-                assert_eq!(
-                    read_len,
-                    quals.len(),
-                    "length read doesn't equal length qual"
-                );
-            }
-        })
-}
+    #[ignore]
+    #[test]
+    fn test_filter_with_contam() {
+        filter(
+            &mut std::fs::File::open("test-data/test.fastq").unwrap(),
+            Cli {
+                minlength: 100,
+                maxlength: 100000,
+                minqual: 5.0,
+                maxqual: 100.0,
+                trim_approach: Some(TrimApproach::FixedCrop),
+                cutoff: None,
+                headcrop: 10,
+                tailcrop: 10,
+                threads: 1,
+                contam: Some("test-data/random_contam.fa".to_owned()),
+                inverse: false,
+                input: None,
+                mingc: Some(0.0),
+                maxgc: Some(1.0),
+            },
+        );
+    }
 
-#[test]
-fn test_quals() {
-    let rec = fastq::Reader::new(std::fs::File::open("test-data/test.fastq").unwrap())
-        .records()
-        .next()
-        .unwrap()
-        .unwrap();
-    let quals = &rec.qual()[0..100]
-        .iter()
-        .map(|i| i - 33)
-        .collect::<Vec<u8>>();
-    assert_eq!(
-        quals,
-        &vec![
-            17, 19, 11, 5, 3, 19, 22, 24, 20, 22, 30, 31, 32, 20, 21, 30, 28, 10, 13, 12, 18, 18,
-            18, 19, 24, 25, 35, 33, 34, 35, 34, 27, 29, 25, 21, 18, 19, 12, 14, 15, 24, 26, 24, 7,
-            12, 17, 17, 19, 17, 8, 14, 15, 13, 15, 9, 3, 4, 23, 23, 29, 23, 10, 29, 30, 31, 27, 25,
-            14, 2, 13, 19, 14, 13, 13, 3, 2, 10, 17, 19, 25, 27, 20, 19, 11, 5, 7, 8, 8, 5, 2, 10,
-            12, 16, 18, 16, 14, 12, 15, 2, 3
-        ],
-        "quals not as expected!"
-    )
-}
+    #[test]
+    fn test_record_qual_len() {
+        fastq::Reader::new(std::fs::File::open("test-data/test.fastq").unwrap())
+            .records()
+            .for_each(|record| {
+                let record = record.unwrap();
+                if !record.is_empty() {
+                    let read_len = record.seq().len();
+                    let quals = record.qual();
+                    assert_eq!(
+                        read_len,
+                        quals.len(),
+                        "length read doesn't equal length qual"
+                    );
+                }
+            })
+    }
 
-#[test]
-fn phred_score_to_probability_test() {
-    let cases: [(u8, f64); 4] = [
-        (20, 0.01), // Q20
-        (30, 0.001), // Q30
-        (15, 0.03162277660168379), // Q15
-        (25, 0.0031622776601683794), // Q25
-    ];
+    #[test]
+    fn test_quals() {
+        let rec = fastq::Reader::new(std::fs::File::open("test-data/test.fastq").unwrap())
+            .records()
+            .next()
+            .unwrap()
+            .unwrap();
+        let quals = &rec.qual()[0..100]
+            .iter()
+            .map(|i| i - 33)
+            .collect::<Vec<u8>>();
+        assert_eq!(
+            quals,
+            &vec![
+                17, 19, 11, 5, 3, 19, 22, 24, 20, 22, 30, 31, 32, 20, 21, 30, 28, 10, 13, 12, 18, 18,
+                18, 19, 24, 25, 35, 33, 34, 35, 34, 27, 29, 25, 21, 18, 19, 12, 14, 15, 24, 26, 24, 7,
+                12, 17, 17, 19, 17, 8, 14, 15, 13, 15, 9, 3, 4, 23, 23, 29, 23, 10, 29, 30, 31, 27, 25,
+                14, 2, 13, 19, 14, 13, 13, 3, 2, 10, 17, 19, 25, 27, 20, 19, 11, 5, 7, 8, 8, 5, 2, 10,
+                12, 16, 18, 16, 14, 12, 15, 2, 3
+            ],
+            "quals not as expected!"
+        )
+    }
 
-    for (phred, prob) in cases {
-        assert_eq!(phred_score_to_probability(phred), prob);
+    #[test]
+    fn phred_score_to_probability_test() {
+        let cases: [(u8, f64); 4] = [
+            (20, 0.01), // Q20
+            (30, 0.001), // Q30
+            (15, 0.03162277660168379), // Q15
+            (25, 0.0031622776601683794), // Q25
+        ];
+
+        for (phred, prob) in cases {
+            assert_eq!(phred_score_to_probability(phred), prob);
+        }
     }
 }
