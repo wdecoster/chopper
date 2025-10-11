@@ -492,6 +492,94 @@ fn cal_gc(readseq: &[u8]) -> f64 {
 mod tests {
     use super::*;
 
+    /// Simple mock trimming strategy that returns predefined segments
+    struct MockTrimmer {
+        segments: Vec<(usize, usize)>,
+    }
+
+    impl MockTrimmer {
+        fn new(segments: Vec<(usize, usize)>) -> Self {
+            MockTrimmer { segments }
+        }
+    }
+
+    impl TrimStrategy for MockTrimmer {
+        fn trim(&self, _record: &fastq::Record) -> Vec<(usize, usize)> {
+            self.segments.clone()
+        }
+    }
+
+    fn make_record(seq: &str, qual: &str) -> fastq::Record {
+        fastq::Record::with_attrs("read1", None, seq.as_bytes(), qual.as_bytes())
+    }
+
+    fn default_args() -> Cli {
+        Cli {
+            minqual: 0.0,
+            maxqual: 1000.0,
+            minlength: 5,
+            maxlength: usize::MAX,
+            mingc: None,
+            maxgc: None,
+            contam: None,
+            trim_approach: None,
+            cutoff: None,
+            headcrop: 0,
+            tailcrop: 0,
+            threads: 1,
+            input: None,
+            inverse: false,
+        }
+    }
+
+    #[test]
+    fn test_empty_record_returns_empty_vec() {
+        let record = fastq::Record::new();
+        let args = default_args();
+
+        let result = get_valid_segment(&record, &args, &None, &None);
+        assert!(result.is_empty(), "Expected empty result for empty record");
+    }
+
+    #[test]
+    fn test_too_short_record_filtered_before_trimming() {
+        let record = make_record("ATGC", "IIII"); // length 4
+        let mut args = default_args();
+        args.minlength = 5;
+
+        let result = get_valid_segment(&record, &args, &None, &None);
+        assert!(result.is_empty(), "Expected record to be filtered out due to minlength");
+    }
+
+    #[test]
+    fn test_valid_before_and_after_trimming() {
+        let record = make_record("ATGCGTACGA", "IIIIIIIIII");
+        let mut args = default_args();
+        args.minlength = 5;
+
+        let trimmer = MockTrimmer::new(vec![(0, 10)]);
+        let trimmer = Some(Arc::new(trimmer) as Arc<dyn TrimStrategy>);
+
+        let result = get_valid_segment(&record, &args, &None, &trimmer);
+        assert_eq!(result, vec![(0, 10)], "Record should remain valid after trimming");
+    }
+
+    #[test]
+    fn test_multiple_segments_only_some_valid() {
+        let record = make_record("ATGCGTACGA", "IIIIIIIIII");
+        let mut args = default_args();
+        args.minlength = 4;
+
+        // Return three segments, the second one is too short
+        let trimmer = MockTrimmer::new(vec![(0, 3), (3, 5), (5, 10)]);
+        let trimmer = Some(Arc::new(trimmer) as Arc<dyn TrimStrategy>);
+
+        let result = get_valid_segment(&record, &args, &None, &trimmer);
+
+        // Only (5,10) has length >=4
+        assert_eq!(result, vec![(5, 10)]);
+    }
+
     #[test]
     fn test_ave_qual() {
         // Original test values need to be adjusted by adding 33 to each value
