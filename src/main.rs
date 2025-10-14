@@ -238,7 +238,7 @@ where
             total_reads = total_reads.saturating_add(1);
 
 
-            let valid_segments = get_valid_segment(&record, &args, &aligner_option, &trimmer_strategy);
+            let valid_segments = get_valid_segments(&record, &args, &aligner_option, &trimmer_strategy);
             valid_segments.iter().enumerate()
                 .map(|(i, (start, end))| WritableRecord::new(&record, *start, *end, valid_segments.len(),i))
                 .for_each(|writable_record| {
@@ -331,7 +331,7 @@ where
                     total_reads_.fetch_add(1, Ordering::Relaxed);
                     
 
-                    let valid_segments = get_valid_segment(&record, &args, &aligner_option, &trimmer_strategy);
+                    let valid_segments = get_valid_segments(&record, &args, &aligner_option, &trimmer_strategy);
                     let valid_segments = valid_segments.iter().enumerate()
                         .map(|(i, (start, end))| WritableRecord::new(&record, *start, *end, valid_segments.len(),i)).collect();
 
@@ -361,7 +361,7 @@ where
 /// # Returns
 /// - `Vec<(usize, usize)>`: A vector containing the valid segments of the read (start and end indices)
 ///   if the record passes all filters.
-fn get_valid_segment(record: &fastq::Record, args: &Cli, aligner_option: &Option<Arc<Aligner<Built>>>, trimmer_strategy: &Option<Arc<dyn TrimStrategy + 'static>>) -> Vec<(usize, usize)> {
+fn get_valid_segments(record: &fastq::Record, args: &Cli, aligner_option: &Option<Arc<Aligner<Built>>>, trimmer_strategy: &Option<Arc<dyn TrimStrategy + 'static>>) -> Vec<(usize, usize)> {
     if record.is_empty() {
         return vec![];
     }
@@ -537,7 +537,7 @@ mod tests {
         let record = fastq::Record::new();
         let args = default_args();
 
-        let result = get_valid_segment(&record, &args, &None, &None);
+        let result = get_valid_segments(&record, &args, &None, &None);
         assert!(result.is_empty(), "Expected empty result for empty record");
     }
 
@@ -547,7 +547,7 @@ mod tests {
         let mut args = default_args();
         args.minlength = 5;
 
-        let result = get_valid_segment(&record, &args, &None, &None);
+        let result = get_valid_segments(&record, &args, &None, &None);
         assert!(result.is_empty(), "Expected record to be filtered out due to minlength");
     }
 
@@ -560,7 +560,7 @@ mod tests {
         let trimmer = MockTrimmer::new(vec![(0, 10)]);
         let trimmer = Some(Arc::new(trimmer) as Arc<dyn TrimStrategy>);
 
-        let result = get_valid_segment(&record, &args, &None, &trimmer);
+        let result = get_valid_segments(&record, &args, &None, &trimmer);
         assert_eq!(result, vec![(0, 10)], "Record should remain valid after trimming");
     }
 
@@ -574,7 +574,7 @@ mod tests {
         let trimmer = MockTrimmer::new(vec![(0, 3), (3, 5), (5, 10)]);
         let trimmer = Some(Arc::new(trimmer) as Arc<dyn TrimStrategy>);
 
-        let result = get_valid_segment(&record, &args, &None, &trimmer);
+        let result = get_valid_segments(&record, &args, &None, &trimmer);
 
         // Only (5,10) has length >=4
         assert_eq!(result, vec![(5, 10)]);
