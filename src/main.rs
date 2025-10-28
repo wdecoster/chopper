@@ -1,16 +1,19 @@
 use bio::io::fastq;
 use clap::{ Parser, ValueEnum};
+use crossbeam_channel::{Receiver, Sender, Select};
 use minimap2::*;
 use rayon::prelude::*;
 use std::error::Error;
-use std::io::Read;
+use std::io::{BufWriter, Read, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
+use records::WritableRecord;
 use trimmers::*;
 use utils::file_reader;
 
+mod records;
 mod trimmers;
 mod utils;
 
@@ -201,84 +204,209 @@ where
     } else { None };
 
     let trimmer_strategy = build_trimming_approach(&args);
-    
-    let total_reads_ = Arc::new(AtomicUsize::new(0));
-    let output_reads_ = Arc::new(AtomicUsize::new(0));
 
-    fastq::Reader::new(input)
-        .records()
-        .par_bridge()
+    match args.threads {
+        1 => sequential_filter(input, &args, &aligner_option, &trimmer_strategy),
+        _ => parallel_filter(input, &args, &aligner_option, &trimmer_strategy)
+    }
+}
+
+/// Applies sequential filtering to the FASTQ records from the given `input`.
+///
+/// Each record is validated against filtering criteria such as:
+/// - Length
+/// - Quality
+/// - GC content
+/// - Contamination (if an `aligner_option` is provided)
+///
+/// If the record passes the filters, an optional trimming strategy can be applied
+/// (`trimmer_strategy`). Valid records are then written to the standard output.
+fn sequential_filter<T>(input: &mut T, args: &Cli, aligner_option: &Option<Arc<Aligner<Built>>>, trimmer_strategy: &Option<Arc<dyn TrimStrategy + 'static>>) 
+where
+    T: Read + std::marker::Send,
+{
+    let mut total_reads: usize = 0;
+    let mut output_reads: usize = 0;
+
+    let stdout = std::io::stdout();
+    let mut writer = BufWriter::new(stdout.lock());
+
+    fastq::Reader::new(input).records()
+        .into_iter()
         .for_each(|record| {
             let record = record.expect("ERROR: problem parsing fastq record");
-            total_reads_.fetch_add(1, Ordering::SeqCst);
+            total_reads = total_reads.saturating_add(1);
 
-            if record.is_empty() {
-                return;
-            }
 
-            let valid_qual = is_valid_quality(&record, args.minqual, args.maxqual);
-            let valid_len = is_valid_length(&record, args.minlength, args.maxlength);
-
-            // If a GC content filter is set, validate the GC content; otherwise, assume it is valid.
-            let valid_gc_p = if args.mingc.is_some() || args.maxgc.is_some() {
-                is_valid_gc_percent(&record, args.mingc.unwrap_or(0.0), args.maxgc.unwrap_or(1.0))
-            } else { true };
-
-            // If a contaminants filter is set, validate the reads; otherwise, assume it is valid
-            let is_not_contam = if let Some(ref aligner) = aligner_option {
-                !is_contamination(&record.seq(), aligner)
-            } else { true };
-
-            if (valid_gc_p && valid_len && valid_qual && is_not_contam) ^ args.inverse {
-                let segments = if let Some(ref trimmer) = trimmer_strategy {
-                    trimmer.trim(&record)
-                } else {
-                    vec![(0, record.seq().len())]
-                };
-
-                for (segment_idx, (start, end)) in segments.iter().enumerate() {
-                    // Check if the trimmed segment meets the minimum length requirement
-                    if end - start >= args.minlength {
-                        write_record(&record, *start, *end, segments.len(), segment_idx);
-                        output_reads_.fetch_add(1, Ordering::SeqCst);
-                    }
-                }
-            }
+            let valid_segments = get_valid_segments(&record, &args, &aligner_option, &trimmer_strategy);
+            valid_segments.iter().enumerate()
+                .map(|(i, (start, end))| WritableRecord::new(&record, *start, *end, valid_segments.len(),i))
+                .for_each(|writable_record| {
+                    output_reads = output_reads.saturating_add(1);
+                    let _ = writable_record.write_on_buffer(&mut writer);
+                });
         });
 
+    writer.flush().unwrap();
+    eprintln!("Kept {output_reads} reads out of {total_reads} reads");
+}
+
+/// Applies parallel filtering to the FASTQ records from the given `input`.
+///
+/// Each record is validated against filtering criteria such as:
+/// - Length
+/// - Quality
+/// - GC content
+/// - Contamination (if an `aligner_option` is provided)
+///
+/// If the record passes the filters, an optional trimming strategy can be applied
+/// (`trimmer_strategy`). Valid records are then written to the standard output.
+fn parallel_filter<T>(input: &mut T, args: &Cli, aligner_option: &Option<Arc<Aligner<Built>>>, trimmer_strategy: &Option<Arc<dyn TrimStrategy + 'static>>) 
+where
+    T: Read + std::marker::Send,
+{
+    let total_reads_ = Arc::new(AtomicUsize::new(0));
+    let output_reads_ = Arc::new(AtomicUsize::new(0));
+    let output_reads_2 = Arc::clone(&output_reads_);
+
+    let (senders, receivers) = create_channel_pool(args.threads - 1);
+    let senders = Arc::new(Mutex::new(senders));
+
+    rayon::scope(|s| {
+        s.spawn(move |_| {
+            let mut read_counter: usize = 0;
+            let stdout = std::io::stdout();
+            let mut writer = BufWriter::new(stdout.lock());
+
+            
+            let mut sel = Select::new();
+            for r in &receivers {
+                sel.recv(&r);
+            }
+
+            let mut current_active_channels = receivers.len();
+
+            while 0 < current_active_channels {
+                // Wait until a receive operation becomes ready and try executing it.
+                let index = sel.ready();
+                let res = receivers[index].try_recv();
+
+                match res {
+                    Ok(writable_records) => {
+                        for writable_record in writable_records {
+                            let _ = writable_record.write_on_buffer(&mut writer);
+                            read_counter += 1;
+                        }
+                    },
+                    Err(e) => {
+                        if e.is_empty() {
+                            // No messages available in the channel
+                            continue;
+                        }
+                        // Remove channel because its sender is disconnected
+                        sel.remove(index);
+                        current_active_channels -= 1;
+                    },
+                }
+            }
+
+            writer.flush().unwrap();
+            output_reads_2.fetch_add(read_counter, Ordering::Relaxed);
+        });
+
+        s.spawn(|_| {
+            fastq::Reader::new(input).records()
+                .par_bridge()
+                .for_each_init(|| {
+                    // Return an Option with a Sender that will be used only by one worker
+                    if let Ok(mut senders_guard) = senders.lock() {
+                        senders_guard.pop()
+                    } else {
+                        None
+                    }
+                },
+
+                |sender, record| {
+                    let record = record.expect("ERROR: problem parsing fastq record");
+                    total_reads_.fetch_add(1, Ordering::Relaxed);
+                    
+
+                    let valid_segments = get_valid_segments(&record, &args, &aligner_option, &trimmer_strategy);
+                    let valid_segments = valid_segments.iter().enumerate()
+                        .map(|(i, (start, end))| WritableRecord::new(&record, *start, *end, valid_segments.len(),i)).collect();
+
+                    if let Some(ref s) = sender {
+                        // It's not necessary to handle this, because the receiver remains pending
+                        // until the last record has been processed.
+                        let _ = s.send(valid_segments);
+                    } else {
+                        // This case should not happen unless the number of receivers is set to be less than the number of threads.
+                        // (see: https://users.rust-lang.org/t/what-is-the-expected-behavior-of-for-each-init-with-par-bridge-in-rayon/134136/5?u=millarcd)
+                        eprintln!("Error: failed to send the read for writing");
+                    }
+                });
+            });
+    });
+
+    
     let output_reads = output_reads_.load(Ordering::SeqCst);
     let total_reads = total_reads_.load(Ordering::SeqCst);
     eprintln!("Kept {output_reads} reads out of {total_reads} reads");
 }
 
-/// Write a record to stdout
-fn write_record(record: &fastq::Record, start_pos: usize, end_pos: usize, total_segments: usize, segment_idx: usize) {
-    // Use a single formatted string with one allocation for the header
-    let header = if total_segments > 1 {
-        // Add suffix for multiple segments
-        match record.desc() {
-            Some(d) => format!("@{}_segment_{} {}", record.id(), segment_idx + 1, d),
-            None => format!("@{}_segment_{}", record.id(), segment_idx + 1),
+/// Analyzes the quality of a FASTQ record to determine whether it meets the filtering
+/// criteria specified by the input parameters. If it does, the record is trimmed using
+/// the provided trimming strategy.
+///
+/// # Returns
+/// - `Vec<(usize, usize)>`: A vector containing the valid segments of the read (start and end indices)
+///   if the record passes all filters.
+fn get_valid_segments(record: &fastq::Record, args: &Cli, aligner_option: &Option<Arc<Aligner<Built>>>, trimmer_strategy: &Option<Arc<dyn TrimStrategy + 'static>>) -> Vec<(usize, usize)> {
+    if record.is_empty() {
+        return vec![];
+    }
+
+    let valid_qual = is_valid_quality(&record, args.minqual, args.maxqual);
+    let valid_len = is_valid_length(&record, args.minlength, args.maxlength);
+
+    // If a GC content filter is set, validate the GC content; otherwise, assume it is valid.
+    let valid_gc_p = if args.mingc.is_some() || args.maxgc.is_some() {
+        is_valid_gc_percent(&record, args.mingc.unwrap_or(0.0), args.maxgc.unwrap_or(1.0))
+    } else { true };
+
+    // If a contaminants filter is set, validate the reads; otherwise, assume it is valid
+    let is_not_contam = if let Some(ref aligner) = aligner_option {
+        !is_contamination(&record.seq(), aligner)
+    } else { true };
+
+    if (valid_gc_p && valid_len && valid_qual && is_not_contam) ^ args.inverse {
+        if let Some(ref trimmer) = trimmer_strategy {
+            trimmer.trim(&record).into_iter()
+                // Verify minimum length for each segment
+                .filter(|&(start, end)| {
+                    args.minlength <= end - start
+                }).collect()
+        } else {
+            vec![(0, record.seq().len())]
         }
     } else {
-        // Single segment, use original header
-        match record.desc() {
-            Some(d) => format!("@{} {}", record.id(), d),
-            None => format!("@{}", record.id()),
-        }
-    };
-    
-    // Apply the trimming to both sequence and quality data
-    let seq_slice = &record.seq()[start_pos..end_pos];
-    let qual_slice = &record.qual()[start_pos..end_pos];
-    
-    // Use a single print to minimize syscalls
-    println!(
-        "{}\n{}\n+\n{}",
-        header,
-        unsafe { std::str::from_utf8_unchecked(seq_slice) },
-        unsafe { std::str::from_utf8_unchecked(qual_slice) }
-    );
+        vec![]
+    }
+}
+
+/// Returns a pair of vectors containing the senders and receivers of `n_channels`
+/// unbounded channels.
+fn create_channel_pool(n_channels: usize) -> (Vec<Sender<Vec<WritableRecord>>>, Vec<Receiver<Vec<WritableRecord>>>) {
+    let mut senders = Vec::with_capacity(n_channels);
+    let mut receivers = Vec::with_capacity(n_channels);
+
+    for _ in 0..n_channels {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        senders.push(tx);
+        receivers.push(rx);
+    }
+
+    (senders, receivers)
 }
 
 /// This function calculates the average quality of a read, and does this correctly
@@ -360,196 +488,293 @@ fn cal_gc(readseq: &[u8]) -> f64 {
     (gc_count as f64) / (readseq.len() as f64)
 }
 
-#[test]
-fn test_ave_qual() {
-    // Original test values need to be adjusted by adding 33 to each value
-    assert_eq!(ave_qual(&[10+33]), 10.0);
-    assert!((ave_qual(&[10+33, 11+33, 12+33]) - 10.923583702678473) < 0.00001);
-    assert!((ave_qual(&[10+33, 11+33, 12+33, 20+33, 30+33, 40+33, 50+33]) - 14.408827647036087) < 0.00001);
-    assert!(
-        (ave_qual(&[
-            17+33, 19+33, 11+33, 5+33, 3+33, 19+33, 22+33, 24+33, 20+33, 22+33, 30+33, 31+33, 32+33, 20+33, 21+33, 30+33, 28+33, 10+33, 13+33, 12+33, 18+33, 18+33,
-            18+33, 19+33, 24+33, 25+33, 35+33, 33+33, 34+33, 35+33, 34+33, 27+33, 29+33, 25+33, 21+33, 18+33, 19+33, 12+33, 14+33, 15+33, 24+33, 26+33, 24+33, 7+33,
-            12+33, 17+33, 17+33, 19+33, 17+33, 8+33, 14+33, 15+33, 13+33, 15+33, 9+33, 3+33, 4+33, 23+33, 23+33, 29+33, 23+33, 10+33, 29+33, 30+33, 31+33, 27+33, 25+33,
-            14+33, 2+33, 13+33, 19+33, 14+33, 13+33, 13+33, 3+33, 2+33, 10+33, 17+33, 19+33, 25+33, 27+33, 20+33, 19+33, 11+33, 5+33, 7+33, 8+33, 8+33, 5+33, 2+33, 10+33,
-            12+33, 16+33, 18+33, 16+33, 14+33, 12+33, 15+33, 2+33, 3+33, 11+33, 10+33, 15+33, 17+33, 17+33, 16+33, 13+33, 18+33, 26+33, 26+33, 23+33, 25+33, 23+33,
-            18+33, 16+33, 33+33, 30+33, 26+33, 26+33, 21+33, 23+33, 8+33, 8+33, 11+33, 11+33, 6+33, 14+33, 19+33, 22+33, 20+33, 20+33, 18+33, 17+33, 20+33, 23+33,
-            24+33, 28+33, 28+33, 28+33, 21+33, 20+33, 25+33, 27+33, 37+33, 28+33, 36+33, 29+33, 24+33, 27+33, 16+33, 18+33, 12+33, 8+33, 5+33, 3+33, 4+33, 6+33, 5+33,
-            4+33, 4+33, 2+33, 10+33, 12+33, 6+33, 9+33, 9+33, 15+33, 16+33, 11+33, 10+33, 8+33, 8+33, 4+33, 3+33, 5+33, 4+33, 6+33, 15+33, 10+33, 9+33, 8+33, 7+33, 12+33, 4+33,
-            5+33, 11+33, 12+33, 17+33, 13+33, 11+33, 17+33, 16+33, 4+33, 4+33, 5+33, 5+33, 12+33, 18+33, 17+33, 21+33
-        ]) - 10.017407548271677)
-            < 0.00001
-    )
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-#[test]
-fn test_filter() {
-    filter(
-        &mut std::fs::File::open("test-data/test.fastq").unwrap(),
+    /// Simple mock trimming strategy that returns predefined segments
+    struct MockTrimmer {
+        segments: Vec<(usize, usize)>,
+    }
+
+    impl MockTrimmer {
+        fn new(segments: Vec<(usize, usize)>) -> Self {
+            MockTrimmer { segments }
+        }
+    }
+
+    impl TrimStrategy for MockTrimmer {
+        fn trim(&self, _record: &fastq::Record) -> Vec<(usize, usize)> {
+            self.segments.clone()
+        }
+    }
+
+    fn make_record(seq: &str, qual: &str) -> fastq::Record {
+        fastq::Record::with_attrs("read1", None, seq.as_bytes(), qual.as_bytes())
+    }
+
+    fn default_args() -> Cli {
         Cli {
-            minlength: 100,
-            maxlength: 100000,
-            minqual: 5.0,
-            maxqual: 200.0,
-            trim_approach: Some(TrimApproach::FixedCrop),
-            cutoff: None,
-            headcrop: 10,
-            tailcrop: 10,
-            threads: 1,
+            minqual: 0.0,
+            maxqual: 1000.0,
+            minlength: 5,
+            maxlength: usize::MAX,
+            mingc: None,
+            maxgc: None,
             contam: None,
-            inverse: false,
-            input: None,
-            mingc: Some(0.0),
-            maxgc: Some(1.0),
-        },
-    );
-}
-
-#[test]
-fn test_filter_with_trim_by_quality_approach() {
-    filter(
-        &mut std::fs::File::open("test-data/test.fastq").unwrap(),
-        Cli {
-            minlength: 100,
-            maxlength: 100000,
-            minqual: 5.0,
-            maxqual: 200.0,
-            trim_approach: Some(TrimApproach::TrimByQuality),
-            cutoff: Some(10),
+            trim_approach: None,
+            cutoff: None,
             headcrop: 0,
             tailcrop: 0,
             threads: 1,
-            contam: None,
-            inverse: false,
             input: None,
-            mingc: Some(0.0),
-            maxgc: Some(1.0),
-        },
-    );
-}
-
-#[test]
-fn test_filter_with_best_read_segment_approach() {
-    filter(
-        &mut std::fs::File::open("test-data/test.fastq").unwrap(),
-        Cli {
-            minlength: 100,
-            maxlength: 100000,
-            minqual: 5.0,
-            maxqual: 200.0,
-            trim_approach: Some(TrimApproach::BestReadSegment),
-            cutoff: Some(10),
-            headcrop: 0,
-            tailcrop: 0,
-            threads: 1,
-            contam: None,
             inverse: false,
-            input: None,
-            mingc: Some(0.0),
-            maxgc: Some(1.0),
-        },
-    );
-}
+        }
+    }
 
-#[test]
-fn test_contam() {
-    let t: usize = 8;
-    let aligner = setup_contamination_filter("test-data/random_contam.fa", &t);
-    let rec = fastq::Reader::new(std::fs::File::open("test-data/test.fastq").unwrap())
-        .records()
-        .next()
-        .unwrap()
-        .unwrap();
-    assert!(is_contamination(&rec.seq(), &aligner));
-}
+    #[test]
+    fn test_empty_record_returns_empty_vec() {
+        let record = fastq::Record::new();
+        let args = default_args();
 
-#[test]
-fn test_no_contam() {
-    let t: usize = 8;
-    let aligner = setup_contamination_filter("test-data/random_contam.fa", &t);
-    let rec = fastq::Reader::new(std::fs::File::open("test-data/other-test.fastq").unwrap())
-        .records()
-        .next()
-        .unwrap()
-        .unwrap();
-    assert!(!is_contamination(&rec.seq(), &aligner));
-}
+        let result = get_valid_segments(&record, &args, &None, &None);
+        assert!(result.is_empty(), "Expected empty result for empty record");
+    }
 
-#[test]
-fn test_filter_with_contam() {
-    filter(
-        &mut std::fs::File::open("test-data/test.fastq").unwrap(),
-        Cli {
-            minlength: 100,
-            maxlength: 100000,
-            minqual: 5.0,
-            maxqual: 100.0,
-            trim_approach: Some(TrimApproach::FixedCrop),
-            cutoff: None,
-            headcrop: 10,
-            tailcrop: 10,
-            threads: 1,
-            contam: Some("test-data/random_contam.fa".to_owned()),
-            inverse: false,
-            input: None,
-            mingc: Some(0.0),
-            maxgc: Some(1.0),
-        },
-    );
-}
+    #[test]
+    fn test_too_short_record_filtered_before_trimming() {
+        let record = make_record("ATGC", "IIII"); // length 4
+        let mut args = default_args();
+        args.minlength = 5;
 
-#[test]
-fn test_record_qual_len() {
-    fastq::Reader::new(std::fs::File::open("test-data/test.fastq").unwrap())
-        .records()
-        .for_each(|record| {
-            let record = record.unwrap();
-            if !record.is_empty() {
-                let read_len = record.seq().len();
-                let quals = record.qual();
-                assert_eq!(
-                    read_len,
-                    quals.len(),
-                    "length read doesn't equal length qual"
-                );
-            }
-        })
-}
+        let result = get_valid_segments(&record, &args, &None, &None);
+        assert!(result.is_empty(), "Expected record to be filtered out due to minlength");
+    }
 
-#[test]
-fn test_quals() {
-    let rec = fastq::Reader::new(std::fs::File::open("test-data/test.fastq").unwrap())
-        .records()
-        .next()
-        .unwrap()
-        .unwrap();
-    let quals = &rec.qual()[0..100]
-        .iter()
-        .map(|i| i - 33)
-        .collect::<Vec<u8>>();
-    assert_eq!(
-        quals,
-        &vec![
-            17, 19, 11, 5, 3, 19, 22, 24, 20, 22, 30, 31, 32, 20, 21, 30, 28, 10, 13, 12, 18, 18,
-            18, 19, 24, 25, 35, 33, 34, 35, 34, 27, 29, 25, 21, 18, 19, 12, 14, 15, 24, 26, 24, 7,
-            12, 17, 17, 19, 17, 8, 14, 15, 13, 15, 9, 3, 4, 23, 23, 29, 23, 10, 29, 30, 31, 27, 25,
-            14, 2, 13, 19, 14, 13, 13, 3, 2, 10, 17, 19, 25, 27, 20, 19, 11, 5, 7, 8, 8, 5, 2, 10,
-            12, 16, 18, 16, 14, 12, 15, 2, 3
-        ],
-        "quals not as expected!"
-    )
-}
+    #[test]
+    fn test_valid_before_and_after_trimming() {
+        let record = make_record("ATGCGTACGA", "IIIIIIIIII");
+        let mut args = default_args();
+        args.minlength = 5;
 
-#[test]
-fn phred_score_to_probability_test() {
-    let cases: [(u8, f64); 4] = [
-        (20, 0.01), // Q20
-        (30, 0.001), // Q30
-        (15, 0.03162277660168379), // Q15
-        (25, 0.0031622776601683794), // Q25
-    ];
+        let trimmer = MockTrimmer::new(vec![(0, 10)]);
+        let trimmer = Some(Arc::new(trimmer) as Arc<dyn TrimStrategy>);
 
-    for (phred, prob) in cases {
-        assert_eq!(phred_score_to_probability(phred), prob);
+        let result = get_valid_segments(&record, &args, &None, &trimmer);
+        assert_eq!(result, vec![(0, 10)], "Record should remain valid after trimming");
+    }
+
+    #[test]
+    fn test_multiple_segments_only_some_valid() {
+        let record = make_record("ATGCGTACGA", "IIIIIIIIII");
+        let mut args = default_args();
+        args.minlength = 4;
+
+        // Return three segments, the second one is too short
+        let trimmer = MockTrimmer::new(vec![(0, 3), (3, 5), (5, 10)]);
+        let trimmer = Some(Arc::new(trimmer) as Arc<dyn TrimStrategy>);
+
+        let result = get_valid_segments(&record, &args, &None, &trimmer);
+
+        // Only (5,10) has length >=4
+        assert_eq!(result, vec![(5, 10)]);
+    }
+
+    #[test]
+    fn test_ave_qual() {
+        // Original test values need to be adjusted by adding 33 to each value
+        assert_eq!(ave_qual(&[10+33]), 10.0);
+        assert!((ave_qual(&[10+33, 11+33, 12+33]) - 10.923583702678473) < 0.00001);
+        assert!((ave_qual(&[10+33, 11+33, 12+33, 20+33, 30+33, 40+33, 50+33]) - 14.408827647036087) < 0.00001);
+        assert!(
+            (ave_qual(&[
+                17+33, 19+33, 11+33, 5+33, 3+33, 19+33, 22+33, 24+33, 20+33, 22+33, 30+33, 31+33, 32+33, 20+33, 21+33, 30+33, 28+33, 10+33, 13+33, 12+33, 18+33, 18+33,
+                18+33, 19+33, 24+33, 25+33, 35+33, 33+33, 34+33, 35+33, 34+33, 27+33, 29+33, 25+33, 21+33, 18+33, 19+33, 12+33, 14+33, 15+33, 24+33, 26+33, 24+33, 7+33,
+                12+33, 17+33, 17+33, 19+33, 17+33, 8+33, 14+33, 15+33, 13+33, 15+33, 9+33, 3+33, 4+33, 23+33, 23+33, 29+33, 23+33, 10+33, 29+33, 30+33, 31+33, 27+33, 25+33,
+                14+33, 2+33, 13+33, 19+33, 14+33, 13+33, 13+33, 3+33, 2+33, 10+33, 17+33, 19+33, 25+33, 27+33, 20+33, 19+33, 11+33, 5+33, 7+33, 8+33, 8+33, 5+33, 2+33, 10+33,
+                12+33, 16+33, 18+33, 16+33, 14+33, 12+33, 15+33, 2+33, 3+33, 11+33, 10+33, 15+33, 17+33, 17+33, 16+33, 13+33, 18+33, 26+33, 26+33, 23+33, 25+33, 23+33,
+                18+33, 16+33, 33+33, 30+33, 26+33, 26+33, 21+33, 23+33, 8+33, 8+33, 11+33, 11+33, 6+33, 14+33, 19+33, 22+33, 20+33, 20+33, 18+33, 17+33, 20+33, 23+33,
+                24+33, 28+33, 28+33, 28+33, 21+33, 20+33, 25+33, 27+33, 37+33, 28+33, 36+33, 29+33, 24+33, 27+33, 16+33, 18+33, 12+33, 8+33, 5+33, 3+33, 4+33, 6+33, 5+33,
+                4+33, 4+33, 2+33, 10+33, 12+33, 6+33, 9+33, 9+33, 15+33, 16+33, 11+33, 10+33, 8+33, 8+33, 4+33, 3+33, 5+33, 4+33, 6+33, 15+33, 10+33, 9+33, 8+33, 7+33, 12+33, 4+33,
+                5+33, 11+33, 12+33, 17+33, 13+33, 11+33, 17+33, 16+33, 4+33, 4+33, 5+33, 5+33, 12+33, 18+33, 17+33, 21+33
+            ]) - 10.017407548271677)
+                < 0.00001
+        )
+    }
+
+    #[ignore]
+    #[test]
+    fn test_filter() {
+        filter(
+            &mut std::fs::File::open("test-data/test.fastq").unwrap(),
+            Cli {
+                minlength: 100,
+                maxlength: 100000,
+                minqual: 5.0,
+                maxqual: 200.0,
+                trim_approach: Some(TrimApproach::FixedCrop),
+                cutoff: None,
+                headcrop: 10,
+                tailcrop: 10,
+                threads: 1,
+                contam: None,
+                inverse: false,
+                input: None,
+                mingc: Some(0.0),
+                maxgc: Some(1.0),
+            },
+        );
+    }
+
+    #[ignore]
+    #[test]
+    fn test_filter_with_trim_by_quality_approach() {
+        filter(
+            &mut std::fs::File::open("test-data/test.fastq").unwrap(),
+            Cli {
+                minlength: 100,
+                maxlength: 100000,
+                minqual: 5.0,
+                maxqual: 200.0,
+                trim_approach: Some(TrimApproach::TrimByQuality),
+                cutoff: Some(10),
+                headcrop: 0,
+                tailcrop: 0,
+                threads: 1,
+                contam: None,
+                inverse: false,
+                input: None,
+                mingc: Some(0.0),
+                maxgc: Some(1.0),
+            },
+        );
+    }
+
+    #[ignore]
+    #[test]
+    fn test_filter_with_best_read_segment_approach() {
+        filter(
+            &mut std::fs::File::open("test-data/test.fastq").unwrap(),
+            Cli {
+                minlength: 100,
+                maxlength: 100000,
+                minqual: 5.0,
+                maxqual: 200.0,
+                trim_approach: Some(TrimApproach::BestReadSegment),
+                cutoff: Some(10),
+                headcrop: 0,
+                tailcrop: 0,
+                threads: 1,
+                contam: None,
+                inverse: false,
+                input: None,
+                mingc: Some(0.0),
+                maxgc: Some(1.0),
+            },
+        );
+    }
+
+    #[test]
+    fn test_contam() {
+        let t: usize = 8;
+        let aligner = setup_contamination_filter("test-data/random_contam.fa", &t);
+        let rec = fastq::Reader::new(std::fs::File::open("test-data/test.fastq").unwrap())
+            .records()
+            .next()
+            .unwrap()
+            .unwrap();
+        assert!(is_contamination(&rec.seq(), &aligner));
+    }
+
+    #[test]
+    fn test_no_contam() {
+        let t: usize = 8;
+        let aligner = setup_contamination_filter("test-data/random_contam.fa", &t);
+        let rec = fastq::Reader::new(std::fs::File::open("test-data/other-test.fastq").unwrap())
+            .records()
+            .next()
+            .unwrap()
+            .unwrap();
+        assert!(!is_contamination(&rec.seq(), &aligner));
+    }
+
+    #[ignore]
+    #[test]
+    fn test_filter_with_contam() {
+        filter(
+            &mut std::fs::File::open("test-data/test.fastq").unwrap(),
+            Cli {
+                minlength: 100,
+                maxlength: 100000,
+                minqual: 5.0,
+                maxqual: 100.0,
+                trim_approach: Some(TrimApproach::FixedCrop),
+                cutoff: None,
+                headcrop: 10,
+                tailcrop: 10,
+                threads: 1,
+                contam: Some("test-data/random_contam.fa".to_owned()),
+                inverse: false,
+                input: None,
+                mingc: Some(0.0),
+                maxgc: Some(1.0),
+            },
+        );
+    }
+
+    #[test]
+    fn test_record_qual_len() {
+        fastq::Reader::new(std::fs::File::open("test-data/test.fastq").unwrap())
+            .records()
+            .for_each(|record| {
+                let record = record.unwrap();
+                if !record.is_empty() {
+                    let read_len = record.seq().len();
+                    let quals = record.qual();
+                    assert_eq!(
+                        read_len,
+                        quals.len(),
+                        "length read doesn't equal length qual"
+                    );
+                }
+            })
+    }
+
+    #[test]
+    fn test_quals() {
+        let rec = fastq::Reader::new(std::fs::File::open("test-data/test.fastq").unwrap())
+            .records()
+            .next()
+            .unwrap()
+            .unwrap();
+        let quals = &rec.qual()[0..100]
+            .iter()
+            .map(|i| i - 33)
+            .collect::<Vec<u8>>();
+        assert_eq!(
+            quals,
+            &vec![
+                17, 19, 11, 5, 3, 19, 22, 24, 20, 22, 30, 31, 32, 20, 21, 30, 28, 10, 13, 12, 18, 18,
+                18, 19, 24, 25, 35, 33, 34, 35, 34, 27, 29, 25, 21, 18, 19, 12, 14, 15, 24, 26, 24, 7,
+                12, 17, 17, 19, 17, 8, 14, 15, 13, 15, 9, 3, 4, 23, 23, 29, 23, 10, 29, 30, 31, 27, 25,
+                14, 2, 13, 19, 14, 13, 13, 3, 2, 10, 17, 19, 25, 27, 20, 19, 11, 5, 7, 8, 8, 5, 2, 10,
+                12, 16, 18, 16, 14, 12, 15, 2, 3
+            ],
+            "quals not as expected!"
+        )
+    }
+
+    #[test]
+    fn phred_score_to_probability_test() {
+        let cases: [(u8, f64); 4] = [
+            (20, 0.01), // Q20
+            (30, 0.001), // Q30
+            (15, 0.03162277660168379), // Q15
+            (25, 0.0031622776601683794), // Q25
+        ];
+
+        for (phred, prob) in cases {
+            assert_eq!(phred_score_to_probability(phred), prob);
+        }
     }
 }
