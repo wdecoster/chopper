@@ -1,0 +1,40 @@
+# To get started with Dependabot version updates, you'll need to specify which
+# package ecosystems to update and where the package manifests are located.
+# Please see the documentation for all configuration options:
+# https://docs.github.com/github/administering-a-repository/configuration-options-for-dependency-updates
+
+version: 2
+updates:
+  # Enable version updates for Cargo (Rust)
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+      day: "monday"
+      time: "09:00"
+    # Allow both direct and indirect dependency updates
+    allow:
+      - dependency-type: "direct"
+      - dependency-type: "indirect"
+    # Limit the number of open pull requests for version updates
+    open-pull-requests-limit: 10
+    # Add reviewers (optional - add your GitHub username)
+    # reviewers:
+    #   - "wdecoster"
+    # Add labels to pull requests
+    labels:
+      - "dependencies"
+      - "rust"
+    # Group dependency updates to reduce PR noise
+    groups:
+      rust-minor-patch:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    # Ignore specific dependencies if needed (uncomment as necessary)
+    # ignore:
+    #   - dependency-name: "some-dependency"
+    #     versions: ["1.x", "2.x"]
