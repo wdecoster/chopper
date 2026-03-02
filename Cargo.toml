@@ -10,11 +10,11 @@ description = "A tool to filter fastq files"
 
 [dependencies]
 bio = "3.0.0"
-clap = { version = "4.5.56", features = ["derive"] }
+clap = { version = "4.5.60", features = ["derive"] }
 crossbeam-channel = "0.5"
 rayon = "1.7.0"
 approx = "0.5.1"
-minimap2 = "0.1.30"
+minimap2 = "0.1.31"
 flate2 = { version = "1.1.9", features = [
     "zlib-ng",
 ], default-features = false }
