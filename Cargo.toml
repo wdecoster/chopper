@@ -10,7 +10,7 @@ description = "A tool to filter fastq files"
 
 [dependencies]
 bio = "3.0.0"
-clap = { version = "4.5.60", features = ["derive"] }
+clap = { version = "4.6.0", features = ["derive"] }
 crossbeam-channel = "0.5"
 rayon = "1.7.0"
 approx = "0.5.1"
