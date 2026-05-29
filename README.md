@@ -83,6 +83,11 @@ Trimming Options:
       --cutoff <CUTOFF>
           Set the minimum quality score (Q-score) threshold for trimming low-quality bases from read ends. Required when using the `trim-by-quality`, `best-read-segment`, or `split-by-low-quality` trimming approaches
 
+      --split-window <SPLIT_WINDOW>
+          Minimum number of consecutive bases below --cutoff required to split a read. Shorter low-quality runs are tolerated and kept inside the segment. Only used with the `split-by-low-quality` trimming approach
+          
+          [default: 1]
+
       --headcrop <HEADCROP>
           Trim N bases from the start of each read. Required only when using the `fixed-crop` trimming approach
           
@@ -121,6 +126,9 @@ chopper --trim-approach best-read-segment --cutoff 15 -l 100 -i reads.fastq > be
 
 # Split reads by low-quality segments and output high-quality parts
 chopper --trim-approach split-by-low-quality --cutoff 15 -l 50 -i reads.fastq > split_reads.fastq
+
+# Only split when at least 5 consecutive bases fall below the cutoff (tolerate shorter dips)
+chopper --trim-approach split-by-low-quality --cutoff 15 --split-window 5 -l 50 -i reads.fastq > split_reads.fastq
 ```
 
 ## Citation

@@ -1,11 +1,10 @@
+use std::io::IsTerminal;
 use std::{
     error::Error,
     fs::File,
     io::{self, prelude::*, BufRead, BufReader},
     path::Path,
 };
-use std::io::IsTerminal;
-
 
 const MAGIC_MAX_LEN: usize = 6;
 const GZ_MAGIC: [u8; 3] = [0x1f, 0x8b, 0x08];
