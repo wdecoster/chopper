@@ -1,6 +1,6 @@
 [package]
 name = "chopper"
-version = "0.13.0"
+version = "0.13.1"
 authors = ["wdecoster <decosterwouter@gmail.com>"]
 edition = "2021"
 license = "MIT"
@@ -20,3 +20,9 @@ flate2 = { version = "1.1.9", features = [
 ], default-features = false }
 xz2 = "0.1.7"
 bzip2 = "0.6.0"
+
+[profile.release]
+# Whole-program optimization for the release binary. Slower to compile, but
+# produces a meaningfully faster binary for this CPU-bound workload.
+lto = "fat"
+codegen-units = 1

@@ -21,7 +21,7 @@ impl WritableRecord {
         total_segments: usize,
         segment_idx: usize,
     ) -> Self {
-        let record = record_to_string(&record, start, end, total_segments, segment_idx);
+        let record = record_to_string(record, start, end, total_segments, segment_idx);
 
         WritableRecord { record }
     }

@@ -305,8 +305,8 @@ mod tests {
 
     #[test]
     fn fixed_crop_strategy_test() {
-        let cases: [(usize, usize, Vec<(usize, usize)>); 6] = [
-            (5, 3, vec![(5, 17)]),
+        let cases = [
+            (5usize, 3usize, vec![(5usize, 17usize)]),
             (30, 4, vec![]),
             (1, 1, vec![(1, 19)]),
             (15, 30, vec![]),
@@ -325,9 +325,9 @@ mod tests {
     #[test]
     fn split_by_low_quality_strategy_test() {
         // Test cases: (cutoff, min_length, expected_segments)
-        let cases: [(u8, usize, Vec<(usize, usize)>); 8] = [
+        let cases = [
             // Read 1: Cutoff Q20, min_length 3
-            (20, 3, vec![(6, 9), (10, 16)]),
+            (20u8, 3usize, vec![(6usize, 9usize), (10, 16)]),
             // Read 2: Cutoff Q7, min_length 3
             (7, 3, vec![(4, 15), (17, 20)]),
             // Read 3: Cutoff Q15, min_length 3

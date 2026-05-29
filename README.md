@@ -131,6 +131,30 @@ chopper --trim-approach split-by-low-quality --cutoff 15 -l 50 -i reads.fastq > 
 chopper --trim-approach split-by-low-quality --cutoff 15 --split-window 5 -l 50 -i reads.fastq > split_reads.fastq
 ```
 
+## Performance
+
+chopper's filtering is fast, and in practice the runtime is often dominated by
+(de)compressing gzipped FASTQ rather than by the filtering itself. Since chopper
+reads from stdin and writes to stdout, the recommended way to run it is to pipe
+data through [`pigz`](https://zlib.net/pigz/):
+
+```bash
+pigz -dc reads.fastq.gz | chopper -q 10 -l 500 | pigz > filtered_reads.fastq.gz
+```
+
+This helps in two ways:
+
+- **Output compression is genuinely parallelised.** `pigz` compresses the
+  filtered output across multiple cores, which is usually much faster than a
+  single-threaded `gzip`.
+- **Decompression runs in its own process.** Note that gzip decompression is
+  inherently single-threaded (a gzip stream must be inflated sequentially, so
+  `pigz` cannot parallelise it either). The benefit of piping is that the
+  decompression happens in a separate process, overlapping with chopper's
+  filtering on other cores. chopper itself already uses the fast `zlib-ng`
+  backend for decompression, so reading a `.gz` file directly with `-i` is also
+  efficient.
+
 ## Citation
 
 If you use this tool, please consider citing our [publication](https://academic.oup.com/bioinformatics/article/39/5/btad311/7160911).

@@ -335,26 +335,22 @@ fn sequential_filter<T>(
     let stdout = std::io::stdout();
     let mut writer = BufWriter::new(stdout.lock());
 
-    fastq::Reader::new(input)
-        .records()
-        .into_iter()
-        .for_each(|record| {
-            let record = record.expect("ERROR: problem parsing fastq record");
-            total_reads = total_reads.saturating_add(1);
+    fastq::Reader::new(input).records().for_each(|record| {
+        let record = record.expect("ERROR: problem parsing fastq record");
+        total_reads = total_reads.saturating_add(1);
 
-            let valid_segments =
-                get_valid_segments(&record, &args, &aligner_option, &trimmer_strategy);
-            valid_segments
-                .iter()
-                .enumerate()
-                .map(|(i, (start, end))| {
-                    WritableRecord::new(&record, *start, *end, valid_segments.len(), i)
-                })
-                .for_each(|writable_record| {
-                    output_reads = output_reads.saturating_add(1);
-                    let _ = writable_record.write_on_buffer(&mut writer);
-                });
-        });
+        let valid_segments = get_valid_segments(&record, args, aligner_option, trimmer_strategy);
+        valid_segments
+            .iter()
+            .enumerate()
+            .map(|(i, (start, end))| {
+                WritableRecord::new(&record, *start, *end, valid_segments.len(), i)
+            })
+            .for_each(|writable_record| {
+                output_reads = output_reads.saturating_add(1);
+                let _ = writable_record.write_on_buffer(&mut writer);
+            });
+    });
 
     writer.flush().unwrap();
     eprintln!("Kept {output_reads} reads out of {total_reads} reads");
@@ -393,7 +389,7 @@ fn parallel_filter<T>(
 
             let mut sel = Select::new();
             for r in &receivers {
-                sel.recv(&r);
+                sel.recv(r);
             }
 
             let mut current_active_channels = receivers.len();
@@ -444,7 +440,7 @@ fn parallel_filter<T>(
                         total_reads_.fetch_add(1, Ordering::Relaxed);
 
                         let valid_segments =
-                            get_valid_segments(&record, &args, &aligner_option, &trimmer_strategy);
+                            get_valid_segments(&record, args, aligner_option, trimmer_strategy);
                         let valid_segments = valid_segments
                             .iter()
                             .enumerate()
@@ -489,21 +485,38 @@ fn get_valid_segments(
         return vec![];
     }
 
-    let valid_qual = is_valid_quality(&record, args.minqual, args.maxqual);
-    let valid_len = is_valid_length(&record, args.minlength, args.maxlength);
+    // Evaluate filters cheapest-first and bail out early so that the expensive
+    // contamination alignment is only attempted for reads that pass everything
+    // else. The early returns are only safe in normal mode: with --inverse a read
+    // that fails a filter may still be kept, so we must evaluate all filters and
+    // defer to the final XOR below.
 
-    // If a GC content filter is set, validate the GC content; otherwise, assume it is valid.
-    let valid_gc_p = if args.mingc.is_some() || args.maxgc.is_some() {
-        is_valid_gc_percent(
-            &record,
-            args.mingc.unwrap_or(0.0),
-            args.maxgc.unwrap_or(1.0),
-        )
+    // 1. Length: O(1).
+    let valid_len = is_valid_length(record, args.minlength, args.maxlength);
+    if !valid_len && !args.inverse {
+        return vec![];
+    }
+
+    // 2. Quality: a single pass over the quality scores, skipped entirely when no
+    // quality filter is set (the default thresholds keep every read anyway).
+    let valid_qual = if args.minqual > 0.0 || args.maxqual < 1000.0 {
+        is_valid_quality(record, args.minqual, args.maxqual)
     } else {
         true
     };
 
-    // If a contaminants filter is set, validate the reads; otherwise, assume it is valid
+    // 3. GC content: a single pass over the sequence, only when a GC filter is set.
+    let valid_gc_p = if args.mingc.is_some() || args.maxgc.is_some() {
+        is_valid_gc_percent(record, args.mingc.unwrap_or(0.0), args.maxgc.unwrap_or(1.0))
+    } else {
+        true
+    };
+
+    if (!valid_qual || !valid_gc_p) && !args.inverse {
+        return vec![];
+    }
+
+    // 4. Contamination: most expensive (minimap2 alignment), so checked last.
     let is_not_contam = if let Some(ref aligner) = aligner_option {
         !is_contamination(&record.seq(), aligner)
     } else {
@@ -513,7 +526,7 @@ fn get_valid_segments(
     if (valid_gc_p && valid_len && valid_qual && is_not_contam) ^ args.inverse {
         if let Some(ref trimmer) = trimmer_strategy {
             trimmer
-                .trim(&record)
+                .trim(record)
                 .into_iter()
                 // Verify minimum length for each segment
                 .filter(|&(start, end)| args.minlength <= end - start)
@@ -526,14 +539,14 @@ fn get_valid_segments(
     }
 }
 
+/// Channel endpoints carrying batches of writable records between the worker and
+/// writer threads.
+type RecordSender = Sender<Vec<WritableRecord>>;
+type RecordReceiver = Receiver<Vec<WritableRecord>>;
+
 /// Returns a pair of vectors containing the senders and receivers of `n_channels`
 /// unbounded channels.
-fn create_channel_pool(
-    n_channels: usize,
-) -> (
-    Vec<Sender<Vec<WritableRecord>>>,
-    Vec<Receiver<Vec<WritableRecord>>>,
-) {
+fn create_channel_pool(n_channels: usize) -> (Vec<RecordSender>, Vec<RecordReceiver>) {
     let mut senders = Vec::with_capacity(n_channels);
     let mut receivers = Vec::with_capacity(n_channels);
 
@@ -559,8 +572,23 @@ fn ave_qual(quals: &[u8]) -> f64 {
     (probability_sum / quals.len() as f64).log10() * -10.0
 }
 
+/// Precomputed lookup table mapping every Phred score (0..=255) to its error
+/// probability 10^(-q/10). Replacing the per-base `powf` with a table lookup is a
+/// large CPU saving in the quality hot loop. Sizing the table to the full `u8`
+/// range means any quality byte indexes safely, so malformed FASTQ (out-of-range
+/// quality characters) can never trigger an out-of-bounds panic.
+static PHRED_LUT: std::sync::LazyLock<[f64; 256]> = std::sync::LazyLock::new(|| {
+    let mut lut = [0.0f64; 256];
+    for (i, v) in lut.iter_mut().enumerate() {
+        *v = 10_f64.powf((i as f64) / -10.0);
+    }
+    lut
+});
+
 /// This function converts a Phred quality score into an
 /// error probability using the formula: 10^(-q/10)
+///
+/// Uses a precomputed lookup table (`PHRED_LUT`) instead of calling `powf`.
 ///
 /// # Example
 ///
@@ -570,8 +598,9 @@ fn ave_qual(quals: &[u8]) -> f64 {
 /// let actual = phred_score_to_probability(phred_score);
 /// assert_eq!(expected, actual);
 /// ```
+#[inline(always)]
 fn phred_score_to_probability(phred: u8) -> f64 {
-    10_f64.powf((phred as f64) / -10.0)
+    PHRED_LUT[phred as usize]
 }
 
 fn setup_contamination_filter(contam_fasta: &str, threads: &usize) -> Arc<Aligner<Built>> {
