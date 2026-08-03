@@ -1,0 +1,37 @@
+# Configuration for cargo-deny
+# https://embark-studios.github.io/cargo-deny/
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "MPL-2.0",
+    "CDLA-Permissive-2.0",
+    "bzip2-1.0.6",       # bzip2/libbzip2 License - used by the bzip2 crate
+]
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "warn"
+wildcards = "warn"
+
+[advisories]
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+# Only flag "unmaintained" advisories for direct dependencies, not deep
+# transitive build-time crates. Those are unmaintained upstream with no safe
+# upgrade and are not a security risk for a CLI; actual vulnerabilities (and
+# unsound advisories) still fail the check.
+unmaintained = "workspace"
+
+[sources]
+unknown-git = "warn"
+unknown-registry = "warn"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
