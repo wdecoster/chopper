@@ -16,6 +16,10 @@ On the other hand, trimming is performed using one of four approaches:
 
 Reads that pass the filters are printed to standard output (STDOUT).
 
+Base modification tags (`MM`/`ML`) carried over from a modified-basecalled BAM can
+be kept in step with the trimming with `--update-mods`, see
+[Base modification tags](#base-modification-tags).
+
 Compared to the Python implementation the scope is to deliver the same results, almost the same functionality, at much faster execution times. At the moment this tool does not support filtering using a sequencing_summary file. If those features are of interest then please reach out.  
 
 ## Installation
@@ -98,6 +102,9 @@ Trimming Options:
           
           [default: 0]
 
+      --update-mods
+          Recompute the base modification tags (MM, ML and MN) written by `samtools fastq -T MM,ML,MN` so that they match the trimmed read. Only those tags are corrected; other position- or quality-dependent tags (qs, ns, ts, du, ...) are passed through unchanged and go stale. Reads whose tags are malformed or do not describe their sequence are reported as an error rather than written out with wrong coordinates
+
 Setup Options:
   -t, --threads <THREADS>
           Use N parallel threads
@@ -129,7 +136,44 @@ chopper --trim-approach split-by-low-quality --cutoff 15 -l 50 -i reads.fastq > 
 
 # Only split when at least 5 consecutive bases fall below the cutoff (tolerate shorter dips)
 chopper --trim-approach split-by-low-quality --cutoff 15 --split-window 5 -l 50 -i reads.fastq > split_reads.fastq
+
+# Keep base modification tags in step with the trimming
+samtools fastq -T MM,ML,MN reads.bam \
+  | chopper --trim-approach fixed-crop --headcrop 20 --tailcrop 20 --update-mods \
+  > trimmed_reads.fastq
 ```
+
+## Base modification tags
+
+Modified basecalls from dorado are carried into fastq as SAM tags:
+
+```bash
+samtools fastq -T MM,ML,MN reads.bam > reads.fastq
+```
+
+`MM` stores the position of each modified base as a count of canonical bases to
+skip, so trimming or splitting a read silently invalidates it: the coordinates
+now point at the wrong bases, or past the end of the read entirely. Passing
+`--update-mods` makes chopper recompute `MM`, `ML` and `MN` for whatever part of
+the read it keeps, for every trimming approach. Calls that fall outside the kept
+range are dropped along with their `ML` probabilities. It is off by default, and
+without it the tags are written through untouched, as before.
+
+**Only `MM`, `ML` and `MN` are corrected.** Other tags that trimming also
+invalidates are passed through unchanged and will be stale, including the mean
+quality `qs`, the signal offsets `ns` and `ts`, and the duration `du`. If those
+matter downstream, recompute or drop them yourself.
+
+Reads whose modification tags cannot be rewritten are a fatal error rather than
+a warning, because writing them through would attach modification coordinates to
+a sequence they no longer describe. This happens when the tags are malformed, when
+`MM` and `ML` disagree on how many calls there are, or when the tags describe a
+different sequence than the read carries (for example because the read was
+already trimmed by another tool without updating them). Rerun without
+`--update-mods` to write such reads through unchanged.
+
+Note that `--update-mods` only fixes the tags. It does not make chopper aware of
+modification calls when deciding what to trim.
 
 ## Performance
 
