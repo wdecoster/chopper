@@ -33,11 +33,14 @@ impl WritableRecord {
     }
 
     /// Writes the record to the provided buffer for stdout output.
-    pub fn write_on_buffer<W: Write>(
-        &self,
-        buf: &mut BufWriter<W>,
-    ) -> Result<usize, std::io::Error> {
-        buf.write(self.record.as_bytes())
+    ///
+    /// Uses `write_all` rather than `write`: a record at or above the buffer's
+    /// capacity bypasses the buffer and reaches the writer in a single `write`
+    /// call, which is free to consume only part of it. FASTQ records for long
+    /// reads routinely exceed the 8 KiB default, so a short write there would
+    /// truncate a read mid-sequence.
+    pub fn write_on_buffer<W: Write>(&self, buf: &mut BufWriter<W>) -> Result<(), std::io::Error> {
+        buf.write_all(self.record.as_bytes())
     }
 }
 

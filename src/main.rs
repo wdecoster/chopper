@@ -310,6 +310,18 @@ fn warn_if_no_mods_seen(args: &Cli) {
     }
 }
 
+/// Reports a failure to write output and exits.
+///
+/// A closed downstream pipe is a normal way for a run to end (`chopper ... |
+/// head`), so it stops quietly rather than reporting an error.
+fn abort_on_write_error(error: &std::io::Error) -> ! {
+    if error.kind() == std::io::ErrorKind::BrokenPipe {
+        std::process::exit(0);
+    }
+    eprintln!("Error: failed to write output: {error}");
+    std::process::exit(1);
+}
+
 /// Reports a read whose base modification tags could not be rewritten and exits.
 ///
 /// Writing the read out with its original tags would attach modification
@@ -393,11 +405,13 @@ fn sequential_filter<T>(
             })
             .for_each(|writable_record| {
                 output_reads = output_reads.saturating_add(1);
-                let _ = writable_record.write_on_buffer(&mut writer);
+                writable_record
+                    .write_on_buffer(&mut writer)
+                    .unwrap_or_else(|e| abort_on_write_error(&e));
             });
     });
 
-    writer.flush().unwrap();
+    writer.flush().unwrap_or_else(|e| abort_on_write_error(&e));
     eprintln!("Kept {output_reads} reads out of {total_reads} reads");
     warn_if_no_mods_seen(args);
 }
@@ -448,7 +462,9 @@ fn parallel_filter<T>(
                 match res {
                     Ok(writable_records) => {
                         for writable_record in writable_records {
-                            let _ = writable_record.write_on_buffer(&mut writer);
+                            writable_record
+                                .write_on_buffer(&mut writer)
+                                .unwrap_or_else(|e| abort_on_write_error(&e));
                             read_counter += 1;
                         }
                     }
@@ -464,7 +480,7 @@ fn parallel_filter<T>(
                 }
             }
 
-            writer.flush().unwrap();
+            writer.flush().unwrap_or_else(|e| abort_on_write_error(&e));
             output_reads_2.fetch_add(read_counter, Ordering::Relaxed);
         });
 
