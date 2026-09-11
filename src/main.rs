@@ -13,6 +13,7 @@ use records::WritableRecord;
 use trimmers::*;
 use utils::file_reader;
 
+mod modtags;
 mod records;
 mod trimmers;
 mod utils;
@@ -126,6 +127,15 @@ struct Cli {
         help_heading = "Trimming Options"
     )]
     tailcrop: usize,
+
+    /// Recompute the base modification tags (MM, ML and MN) written by
+    /// `samtools fastq -T MM,ML,MN` so that they match the trimmed read.
+    /// Only those tags are corrected; other position- or quality-dependent
+    /// tags (qs, ns, ts, du, ...) are passed through unchanged and go stale.
+    /// Reads whose tags are malformed or do not describe their sequence are
+    /// reported as an error rather than written out with wrong coordinates.
+    #[arg(long, help_heading = "Trimming Options")]
+    update_mods: bool,
 
     /// Use N parallel threads
     #[arg(
@@ -288,6 +298,33 @@ fn build_trimming_approach(args: &Cli) -> Option<Arc<dyn TrimStrategy>> {
     }
 }
 
+/// Warns when `--update-mods` was requested but no read carried an `MM` tag,
+/// which usually means the tags were dropped before chopper saw them (for
+/// instance `samtools fastq` without `-T MM,ML`).
+fn warn_if_no_mods_seen(args: &Cli) {
+    if args.update_mods && modtags::reads_with_mods() == 0 {
+        eprintln!(
+            "Warning: --update-mods is set but no read carried an MM tag. \
+             Did you keep the tags, e.g. `samtools fastq -T MM,ML,MN`?"
+        );
+    }
+}
+
+/// Reports a read whose base modification tags could not be rewritten and exits.
+///
+/// Writing the read out with its original tags would attach modification
+/// coordinates to a sequence they no longer describe, so `--update-mods` treats
+/// this as fatal rather than passing corrupt data downstream.
+fn abort_on_mod_tag_error(record: &fastq::Record, error: &modtags::ModTagError) -> ! {
+    let name = record.id().split('\t').next().unwrap_or(record.id());
+    eprintln!("Error: cannot update base modification tags of read {name}: {error}");
+    eprintln!(
+        "Note: the output is incomplete. \
+         Rerun without --update-mods to write these tags through unchanged."
+    );
+    std::process::exit(1);
+}
+
 /// This function filters fastq on stdin based on quality, maxlength and minlength
 /// and applies trimming before writting to stdout
 fn filter<T>(input: &mut T, args: Cli)
@@ -344,7 +381,15 @@ fn sequential_filter<T>(
             .iter()
             .enumerate()
             .map(|(i, (start, end))| {
-                WritableRecord::new(&record, *start, *end, valid_segments.len(), i)
+                WritableRecord::new(
+                    &record,
+                    *start,
+                    *end,
+                    valid_segments.len(),
+                    i,
+                    args.update_mods,
+                )
+                .unwrap_or_else(|e| abort_on_mod_tag_error(&record, &e))
             })
             .for_each(|writable_record| {
                 output_reads = output_reads.saturating_add(1);
@@ -354,6 +399,7 @@ fn sequential_filter<T>(
 
     writer.flush().unwrap();
     eprintln!("Kept {output_reads} reads out of {total_reads} reads");
+    warn_if_no_mods_seen(args);
 }
 
 /// Applies parallel filtering to the FASTQ records from the given `input`.
@@ -445,7 +491,15 @@ fn parallel_filter<T>(
                             .iter()
                             .enumerate()
                             .map(|(i, (start, end))| {
-                                WritableRecord::new(&record, *start, *end, valid_segments.len(), i)
+                                WritableRecord::new(
+                                    &record,
+                                    *start,
+                                    *end,
+                                    valid_segments.len(),
+                                    i,
+                                    args.update_mods,
+                                )
+                                .unwrap_or_else(|e| abort_on_mod_tag_error(&record, &e))
                             })
                             .collect();
 
@@ -466,6 +520,7 @@ fn parallel_filter<T>(
     let output_reads = output_reads_.load(Ordering::SeqCst);
     let total_reads = total_reads_.load(Ordering::SeqCst);
     eprintln!("Kept {output_reads} reads out of {total_reads} reads");
+    warn_if_no_mods_seen(args);
 }
 
 /// Analyzes the quality of a FASTQ record to determine whether it meets the filtering
@@ -699,6 +754,7 @@ mod tests {
             threads: 1,
             input: None,
             inverse: false,
+            update_mods: false,
         }
     }
 
@@ -999,6 +1055,7 @@ mod tests {
                 threads: 1,
                 contam: None,
                 inverse: false,
+                update_mods: false,
                 input: None,
                 mingc: Some(0.0),
                 maxgc: Some(1.0),
@@ -1024,6 +1081,7 @@ mod tests {
                 threads: 1,
                 contam: None,
                 inverse: false,
+                update_mods: false,
                 input: None,
                 mingc: Some(0.0),
                 maxgc: Some(1.0),
@@ -1049,6 +1107,7 @@ mod tests {
                 threads: 1,
                 contam: None,
                 inverse: false,
+                update_mods: false,
                 input: None,
                 mingc: Some(0.0),
                 maxgc: Some(1.0),
@@ -1098,6 +1157,7 @@ mod tests {
                 threads: 1,
                 contam: Some("test-data/random_contam.fa".to_owned()),
                 inverse: false,
+                update_mods: false,
                 input: None,
                 mingc: Some(0.0),
                 maxgc: Some(1.0),
