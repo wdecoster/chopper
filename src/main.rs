@@ -93,7 +93,8 @@ struct Cli {
     trim_approach: Option<TrimApproach>,
 
     /// Set the minimum quality score (Q-score) threshold for trimming low-quality bases from read ends.
-    /// Required when using the `trim-by-quality` or `best-read-segment` trimming approaches.
+    /// Required when using the `trim-by-quality`, `best-read-segment`, or
+    /// `split-by-low-quality` trimming approaches.
     #[arg(long, value_parser, help_heading = "Trimming Options")]
     cutoff: Option<u8>,
 
@@ -109,7 +110,8 @@ struct Cli {
     split_window: usize,
 
     /// Trim N bases from the start of each read.
-    /// Required only when using the `fixed-crop` trimming approach.
+    /// Used only with the `fixed-crop` trimming approach, which requires
+    /// at least one of --headcrop and --tailcrop to be greater than 0.
     #[arg(
         long,
         value_parser,
@@ -119,7 +121,8 @@ struct Cli {
     headcrop: usize,
 
     /// Trim N bases from the end of each read.
-    /// Required only when using the `fixed-crop` trimming approach.
+    /// Used only with the `fixed-crop` trimming approach, which requires
+    /// at least one of --headcrop and --tailcrop to be greater than 0.
     #[arg(
         long,
         value_parser,
@@ -163,8 +166,8 @@ struct Cli {
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum TrimApproach {
-    /// Remove a fixed number of bases from both ends of the read.
-    /// Requires setting both --headcrop and --tailcrop.
+    /// Remove a fixed number of bases from the start and/or end of the read.
+    /// At least one of --headcrop and --tailcrop must be greater than 0.
     FixedCrop,
     /// Trim low-quality bases from the ends of the read until reaching
     /// a base with quality ≥ --cutoff.
