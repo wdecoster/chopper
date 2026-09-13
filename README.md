@@ -79,8 +79,8 @@ Trimming Options:
           Select the trimming strategy to apply to the reads
 
           Possible values:
-          - fixed-crop:      Remove a fixed number of bases from the start and/or end of the read. At least one of --headcrop and --tailcrop must be greater than 0
-          - trim-by-quality: Trim low-quality bases from the ends of the read until reaching a base with quality ≥ --cutoff
+          - fixed-crop:           Remove a fixed number of bases from the start and/or end of the read. At least one of --headcrop and --tailcrop must be greater than 0
+          - trim-by-quality:      Trim low-quality bases from the ends of the read until reaching a base with quality ≥ --cutoff
           - best-read-segment:    Extract the highest-quality read segment based on --cutoff, trimming low-quality bases from both ends
           - split-by-low-quality: Split reads by low-quality segments and output high-quality parts on the left and right, provided they pass the length filter
 
@@ -93,12 +93,12 @@ Trimming Options:
           [default: 1]
 
       --headcrop <HEADCROP>
-          Trim N bases from the start of each read. Required only when using the `fixed-crop` trimming approach
+          Trim N bases from the start of each read. Used only with the `fixed-crop` trimming approach, which requires at least one of --headcrop and --tailcrop to be greater than 0
           
           [default: 0]
 
       --tailcrop <TAILCROP>
-          Trim N bases from the end of each read. Required only when using the `fixed-crop` trimming approach
+          Trim N bases from the end of each read. Used only with the `fixed-crop` trimming approach, which requires at least one of --headcrop and --tailcrop to be greater than 0
           
           [default: 0]
 
