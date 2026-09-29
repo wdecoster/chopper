@@ -195,7 +195,7 @@ This helps in two ways:
   inherently single-threaded (a gzip stream must be inflated sequentially, so
   `pigz` cannot parallelise it either). The benefit of piping is that the
   decompression happens in a separate process, overlapping with chopper's
-  filtering on other cores. chopper itself already uses the fast `zlib-ng`
+  filtering on other cores. chopper itself already uses the fast `zlib-rs`
   backend for decompression, so reading a `.gz` file directly with `-i` is also
   efficient.
 
