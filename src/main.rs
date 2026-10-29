@@ -1,4 +1,3 @@
-use bio::io::fastq;
 use clap::{Parser, ValueEnum};
 use crossbeam_channel::{Receiver, Select, Sender};
 use minimap2::*;
@@ -13,6 +12,7 @@ use records::{RecordError, WritableRecord};
 use trimmers::*;
 use utils::file_reader;
 
+mod fastq;
 mod formats;
 mod modtags;
 mod records;
@@ -833,7 +833,7 @@ mod tests {
 
     #[test]
     fn test_empty_record_returns_empty_vec() {
-        let record = fastq::Record::new();
+        let record = fastq::Record::default();
         let args = default_args();
 
         let result = get_valid_segments(&record, &args, &None, &None);
@@ -1195,11 +1195,13 @@ mod tests {
     fn test_contam() {
         let t: usize = 8;
         let aligner = setup_contamination_filter("test-data/random_contam.fa", &t);
-        let rec = fastq::Reader::new(std::fs::File::open("test-data/test.fastq").unwrap())
-            .records()
-            .next()
-            .unwrap()
-            .unwrap();
+        let rec = fastq::Reader::new(std::io::BufReader::new(
+            std::fs::File::open("test-data/test.fastq").unwrap(),
+        ))
+        .records()
+        .next()
+        .unwrap()
+        .unwrap();
         assert!(is_contamination(&rec.seq(), &aligner));
     }
 
@@ -1207,11 +1209,13 @@ mod tests {
     fn test_no_contam() {
         let t: usize = 8;
         let aligner = setup_contamination_filter("test-data/random_contam.fa", &t);
-        let rec = fastq::Reader::new(std::fs::File::open("test-data/other-test.fastq").unwrap())
-            .records()
-            .next()
-            .unwrap()
-            .unwrap();
+        let rec = fastq::Reader::new(std::io::BufReader::new(
+            std::fs::File::open("test-data/other-test.fastq").unwrap(),
+        ))
+        .records()
+        .next()
+        .unwrap()
+        .unwrap();
         assert!(!is_contamination(&rec.seq(), &aligner));
     }
 
@@ -1244,29 +1248,33 @@ mod tests {
 
     #[test]
     fn test_record_qual_len() {
-        fastq::Reader::new(std::fs::File::open("test-data/test.fastq").unwrap())
-            .records()
-            .for_each(|record| {
-                let record = record.unwrap();
-                if !record.is_empty() {
-                    let read_len = record.seq().len();
-                    let quals = record.qual();
-                    assert_eq!(
-                        read_len,
-                        quals.len(),
-                        "length read doesn't equal length qual"
-                    );
-                }
-            })
+        fastq::Reader::new(std::io::BufReader::new(
+            std::fs::File::open("test-data/test.fastq").unwrap(),
+        ))
+        .records()
+        .for_each(|record| {
+            let record = record.unwrap();
+            if !record.is_empty() {
+                let read_len = record.seq().len();
+                let quals = record.qual();
+                assert_eq!(
+                    read_len,
+                    quals.len(),
+                    "length read doesn't equal length qual"
+                );
+            }
+        })
     }
 
     #[test]
     fn test_quals() {
-        let rec = fastq::Reader::new(std::fs::File::open("test-data/test.fastq").unwrap())
-            .records()
-            .next()
-            .unwrap()
-            .unwrap();
+        let rec = fastq::Reader::new(std::io::BufReader::new(
+            std::fs::File::open("test-data/test.fastq").unwrap(),
+        ))
+        .records()
+        .next()
+        .unwrap()
+        .unwrap();
         let quals = &rec.qual()[0..100]
             .iter()
             .map(|i| i - 33)
