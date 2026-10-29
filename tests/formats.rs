@@ -458,12 +458,14 @@ fn sort_order_is_only_kept_when_output_order_is() {
 }
 
 #[test]
-fn secondary_supplementary_and_reverse_records_are_rejected() {
+fn secondary_supplementary_reverse_and_paired_records_are_rejected() {
     let (header, records) = fixture_bam();
     for (flag, expected) in [
         (0x4 | 0x100, "secondary or supplementary"),
         (0x4 | 0x800, "secondary or supplementary"),
         (0x4 | 0x10, "reverse complemented"),
+        (0x4 | 0x8 | 0x1 | 0x40, "read pair"),
+        (0x4 | 0x8 | 0x1 | 0x80, "read pair"),
     ] {
         let mut record = records[0].clone();
         *record.flags_mut() = Flags::from(flag);

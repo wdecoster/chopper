@@ -186,8 +186,9 @@ a single integer type, and an `RG:Z:` tag from FASTQ does not get a matching
 chopper stops with an error rather than write something wrong when the BAM
 holds an aligned read (trimming would invalidate its position and CIGAR), a
 secondary or supplementary record (the read would be written twice), a record
-flagged as reverse complemented (`MM` counts bases on the original strand), or
-a read without base qualities. FASTQ to BAM also stops on header fields after a
+flagged as reverse complemented (`MM` counts bases on the original strand), one
+of a read pair (filtering each mate on its own would leave orphans still flagged
+as paired), or a read without base qualities. FASTQ to BAM also stops on header fields after a
 tab that are not valid SAM tags, and on read names BAM cannot hold (empty, longer
 than 254 characters, or containing `@` or spaces).
 

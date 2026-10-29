@@ -185,6 +185,15 @@ fn bam_to_fastq(record: &RecordBuf, tag_text: TagText) -> Result<fastq::Record, 
             u16::from(flags)
         ));
     }
+    // Mates are filtered and trimmed one by one, which would leave records
+    // flagged as paired whose mate was dropped or renamed into segments.
+    if flags.is_segmented() {
+        return Err(format!(
+            "read {name} is one of a read pair (flag {}); \
+             paired reads are not supported, as filtering would separate mates",
+            u16::from(flags)
+        ));
+    }
     let seq = record.sequence().as_ref();
     let qual = record.quality_scores().as_ref();
     if qual.len() != seq.len() {
