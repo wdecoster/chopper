@@ -118,21 +118,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "buffer-redux"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "431a9cc8d7efa49bc326729264537f5e60affce816c66edf434350778c9f4f54"
-dependencies = [
- "memchr",
-]
-
-[[package]]
-name = "bytecount"
-version = "0.6.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "175812e0be2bccb6abe50bb8d566126198344f707e304f45c648fd8f2cc0365e"
-
-[[package]]
 name = "bytes"
 version = "1.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -501,7 +486,6 @@ checksum = "8ba9456bc1fc790617e793e9c684ae2e6a4bd475dacc6d64ea4f36aafdb161d8"
 dependencies = [
  "libc",
  "minimap2-sys",
- "needletail",
 ]
 
 [[package]]
@@ -524,17 +508,6 @@ checksum = "1fa76a2c86f704bdb222d66965fb3d63269ce38518b83cb0575fca855ebb6316"
 dependencies = [
  "adler2",
  "simd-adler32",
-]
-
-[[package]]
-name = "needletail"
-version = "0.6.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6aa22e1ae8bce4ecf257e2475ef2046026caea08d66b1848d073fe7bc77e4351"
-dependencies = [
- "buffer-redux",
- "bytecount",
- "memchr",
 ]
 
 [[package]]
