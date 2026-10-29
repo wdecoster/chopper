@@ -2,7 +2,7 @@ use std::io::IsTerminal;
 use std::{
     error::Error,
     fs::File,
-    io::{self, prelude::*, BufRead, BufReader},
+    io::{self, prelude::*, BufRead, BufReader, Cursor},
     path::Path,
 };
 
@@ -90,7 +90,29 @@ where
             eprintln!("Error: stdin not detected");
             std::process::exit(1);
         }
-        let fp = BufReader::new(io::stdin());
-        Ok(Box::new(fp))
+        // A file is sniffed by its first bytes above, but stdin can only be
+        // peeked. BAM is BGZF, i.e. gzip, so it has to be decompressed before
+        // its format can be told apart from FASTQ.
+        let (magic, fp) = peek(io::stdin(), GZ_MAGIC.len())?;
+        if magic == GZ_MAGIC {
+            Ok(Box::new(BufReader::with_capacity(
+                BUFF_SIZE,
+                flate2::read::MultiGzDecoder::new(fp),
+            )))
+        } else {
+            Ok(Box::new(BufReader::new(fp)))
+        }
     }
+}
+
+/// Reads up to `n` bytes from the start of `reader` and returns them together
+/// with a reader that still yields the whole stream, those bytes included.
+///
+/// Fewer than `n` bytes come back only when the stream is shorter than that.
+/// A single `read` is not enough here: a pipe hands over whatever has been
+/// written so far, which may be less than the magic number being looked for.
+pub fn peek<R: Read>(mut reader: R, n: usize) -> io::Result<(Vec<u8>, impl Read)> {
+    let mut prefix = Vec::with_capacity(n);
+    (&mut reader).take(n as u64).read_to_end(&mut prefix)?;
+    Ok((prefix.clone(), Cursor::new(prefix).chain(reader)))
 }

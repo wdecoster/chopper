@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 make ci                 # fmt-check + clippy + test, what CI runs
 make all                # fmt, clippy, test, build
-cargo test              # 54 unit tests
+cargo test              # 62 unit tests + 12 end-to-end tests in tests/formats.rs
 cargo test modtags      # one module
 cargo test untrimmed_range_is_unchanged   # one test by name substring
 cargo test -- --ignored # the 4 #[ignore]d end-to-end tests (see below)
@@ -22,7 +22,7 @@ The four `#[ignore]`d tests in `src/main.rs` call `filter()` directly, which wri
 
 ### Everything is a `(start, end)` range over the original record
 
-The single most important invariant: a read is never copied or mutated while being filtered or trimmed. Filters inspect `&fastq::Record`, trimmers return `Vec<(usize, usize)>` of half-open ranges into that record, and only `record_to_string` (`src/records.rs`) ever slices. Multiple ranges mean the read was split into segments.
+The single most important invariant: a read is never copied or mutated while being filtered or trimmed. Filters inspect `&fastq::Record`, trimmers return `Vec<(usize, usize)>` of half-open ranges into that record, and only `record_to_string` / `record_to_bam` (`src/records.rs`) ever slice. Multiple ranges mean the read was split into segments.
 
 This is why a new trimming approach only needs a `TrimStrategy` impl, and why `--update-mods` covers all four approaches for free: everything downstream already speaks in offsets into the untrimmed sequence.
 
@@ -65,11 +65,15 @@ Changes here should be validated against htslib (via pysam) rather than against 
 
 ### Output writing
 
-Use `write_all`, never `write`. Records at or above the `BufWriter`'s 8 KiB capacity bypass the buffer and reach stdout in a single `write` call that may consume only part of it — that is any read over roughly 4 kb, routine here. Both fatal paths (`abort_on_mod_tag_error`, `abort_on_write_error`) use `eprintln!` + `process::exit`, not `Result` propagation; note that exiting from a rayon worker discards whatever is still buffered, so the output of a failed run is deliberately incomplete.
+Use `write_all`, never `write`. Records at or above the `BufWriter`'s 8 KiB capacity bypass the buffer and reach stdout in a single `write` call that may consume only part of it — that is any read over roughly 4 kb, routine here. The fatal paths (`abort_on_record_error`, `abort_on_input_error`, `abort_on_write_error`) use `eprintln!` + `process::exit`, not `Result` propagation; note that exiting from a rayon worker discards whatever is still buffered, so the output of a failed run is deliberately incomplete.
 
 ### Input
 
-`src/utils.rs` sniffs gzip/bzip2/xz by magic bytes (falling back to file extension) and returns a boxed `BufRead`. No `-i` means stdin, and a terminal on stdin is a fatal error.
+`src/utils.rs` sniffs gzip/bzip2/xz by magic bytes (falling back to file extension) and returns a boxed `BufRead`; stdin is peeked for gzip only. No `-i` means stdin, and a terminal on stdin is a fatal error.
+
+### Unaligned BAM (`src/formats.rs`)
+
+BAM is BGZF, so it arrives through the gzip decoder and is recognised by the decompressed `BAM\1` magic. Each BAM record becomes an `InputRecord`: a `fastq::Record` view (phred+33 qualities, tags as SAM text in the id after a tab) that filters and trimmers use unchanged, plus the original `RecordBuf`. Which tags go into the view depends on the output (`TagText`): all of them for FASTQ, only `MM`/`ML`/`MN`/`Mm`/`Ml` for BAM with `--update-mods`, none otherwise. BAM output clones the original record so every other tag keeps its type and order, and the input header is passed through with a chained `@PG`. FASTQ output must stay byte-identical to earlier releases; `tests/formats.rs` checks it against `test-data/regression/v0.14.1.sha256`. Validate BAM changes against htslib (pysam); `test-data/ubam/make_fixtures.py` regenerates the fixtures.
 
 ## Releases
 
