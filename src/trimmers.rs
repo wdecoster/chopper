@@ -219,6 +219,65 @@ impl TrimStrategy for SplitByLowQualityStrategy {
     }
 }
 
+/// Removes a poly(T) head and a poly(A) tail from the outer ends of a read.
+///
+/// The tails are found as cutadapt's `--poly-a` does: scanning inward from the
+/// end of the read, each matching base scores +1 and any other base -2, and the
+/// tail extends to wherever the score peaks, provided at most 20% of it are
+/// other bases. The scoring tolerates the odd sequencing error inside a tail,
+/// and the -2 keeps it from running on into the transcript. The tail must reach
+/// the end of the read: adapters and primers have to be removed first.
+pub struct PolyTailTrimmer {
+    /// Shorter runs are left alone: a read ends in a few A's by chance.
+    min_length: usize,
+}
+
+/// At most one in five bases of a tail may be something else.
+const POLY_TAIL_MAX_ERROR_DIVISOR: usize = 5;
+
+impl PolyTailTrimmer {
+    pub fn new(min_length: usize) -> Self {
+        PolyTailTrimmer { min_length }
+    }
+
+    /// Narrows the outer ends of a read's kept segments: a poly(T) head off
+    /// the start of the first segment and a poly(A) tail off the end of the
+    /// last. Inner segment ends (from splitting) are not touched, as they are
+    /// not read ends. Segments with nothing left are dropped.
+    pub fn trim_outer_ends(&self, seq: &[u8], segments: &mut Vec<(usize, usize)>) {
+        if let Some(first) = segments.first_mut() {
+            first.0 += self.run_length(seq[first.0..first.1].iter(), b"TtUu");
+        }
+        if let Some(last) = segments.last_mut() {
+            last.1 -= self.run_length(seq[last.0..last.1].iter().rev(), b"Aa");
+        }
+        segments.retain(|&(start, end)| start < end);
+    }
+
+    /// Length of the run of `bases` at the start of `seq`, allowing for errors.
+    fn run_length<'a>(&self, seq: impl Iterator<Item = &'a u8>, bases: &[u8]) -> usize {
+        let (mut score, mut best_score, mut best_length, mut errors) = (0i64, 0i64, 0, 0);
+        for (i, base) in seq.enumerate() {
+            if bases.contains(base) {
+                score += 1;
+            } else {
+                score -= 2;
+                errors += 1;
+            }
+            let length = i + 1;
+            if score > best_score && errors * POLY_TAIL_MAX_ERROR_DIVISOR <= length {
+                best_score = score;
+                best_length = length;
+            }
+        }
+        if best_length >= self.min_length {
+            best_length
+        } else {
+            0
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -423,5 +482,151 @@ mod tests {
         // (trailing/leading bad bases trimmed; here it spans the good bases).
         let w4 = SplitByLowQualityStrategy::new(10, 1, 4);
         assert_eq!(w4.trim(&read), vec![(0, 14)]);
+    }
+
+    fn poly_trim(seq: &[u8], min_length: usize) -> Vec<(usize, usize)> {
+        let mut segments = vec![(0, seq.len())];
+        PolyTailTrimmer::new(min_length).trim_outer_ends(seq, &mut segments);
+        segments
+    }
+
+    #[test]
+    fn exact_poly_tails_are_removed_from_both_ends() {
+        let seq = b"TTTTTTTTTTTTGCATGCATCGAAAAAAAAAAAA";
+        assert_eq!(poly_trim(seq, 10), vec![(12, 22)]);
+        // U counts as T, lowercase as uppercase.
+        assert_eq!(
+            poly_trim(b"uuUUUUUUUUUUGCAUGCAUCGaaAAAAAAAAAA", 10),
+            vec![(12, 22)]
+        );
+    }
+
+    #[test]
+    fn errors_inside_a_tail_are_tolerated() {
+        // A substitution, an insertion and a deleted stretch inside each tail.
+        let seq = b"TTTTGTTTTTTTCTTTTGCATGCATCGAAAAAAAAGAAAAACAAAAAA";
+        assert_eq!(poly_trim(seq, 10), vec![(17, 27)]);
+    }
+
+    #[test]
+    fn short_runs_are_left_alone() {
+        let seq = b"TTTTGCATGCATCGAAAAAAAAA"; // 4 T's and 9 A's
+        assert_eq!(poly_trim(seq, 10), vec![(0, seq.len())]);
+        assert_eq!(poly_trim(seq, 4), vec![(4, 14)]);
+    }
+
+    #[test]
+    fn a_tail_does_not_run_on_into_a_rich_sequence() {
+        // The -2 for other bases stops the tail at the transcript, even when
+        // that is A-rich; at most the A's directly before the tail go with it.
+        let seq = b"GCATGCACAGACATAGCAAAAAAAAAAAAAAA";
+        assert_eq!(poly_trim(seq, 10), vec![(0, 17)]);
+    }
+
+    #[test]
+    fn a_read_that_is_all_tail_is_dropped() {
+        assert_eq!(poly_trim(b"AAAAAAAAAAAAAAAAAAAA", 10), vec![]);
+        assert_eq!(poly_trim(b"TTTTTTTTTTTTAAAAAAAAAAAA", 10), vec![]);
+    }
+
+    #[test]
+    fn only_the_outer_ends_of_split_segments_are_trimmed() {
+        let seq = b"TTTTTTTTTTTTGCATGCAAAAAAAAAAAATTTTTTTTTTTTGCATGCAAAAAAAAAAAA";
+        let mut segments = vec![(0, 30), (30, seq.len())];
+        PolyTailTrimmer::new(10).trim_outer_ends(seq, &mut segments);
+        // The A's ending the first segment and the T's starting the second stay.
+        assert_eq!(segments, vec![(12, 30), (30, 48)]);
+    }
+
+    /// Deterministic xorshift, so the simulations below need no extra crate.
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+        fn base(&mut self) -> u8 {
+            b"ACGT"[(self.next() % 4) as usize]
+        }
+        fn chance(&mut self) -> f64 {
+            (self.next() % 1_000_000) as f64 / 1_000_000.0
+        }
+        /// ONT-like errors: half deletions, a quarter each substitutions and insertions.
+        fn noisy(&mut self, seq: &[u8], error_rate: f64) -> Vec<u8> {
+            let mut out = Vec::with_capacity(seq.len());
+            for &b in seq {
+                let r = self.chance();
+                if r < error_rate * 0.5 {
+                    continue;
+                } else if r < error_rate * 0.75 {
+                    let mut other = self.base();
+                    while other == b {
+                        other = self.base();
+                    }
+                    out.push(other);
+                } else if r < error_rate {
+                    out.push(b);
+                    out.push(self.base());
+                } else {
+                    out.push(b);
+                }
+            }
+            out
+        }
+    }
+
+    #[test]
+    fn simulated_noisy_tails_are_removed_almost_entirely() {
+        let mut rng = Rng(42);
+        for error_rate in [0.02, 0.05, 0.10, 0.15] {
+            let (mut tail_left, mut body_lost, n) = (0, 0, 2000);
+            for _ in 0..n {
+                let body: Vec<u8> = (0..300).map(|_| rng.base()).collect();
+                let head = rng.noisy(&[b'T'; 30], error_rate);
+                let body = rng.noisy(&body, error_rate);
+                let tail = rng.noisy(&[b'A'; 60], error_rate);
+                let seq = [&head[..], &body[..], &tail[..]].concat();
+                let (start, end) = (head.len(), head.len() + body.len());
+
+                let trimmed = poly_trim(&seq, 10);
+                assert_eq!(trimmed.len(), 1, "a read with a body is kept");
+                let (s, e) = trimmed[0];
+                tail_left += start.saturating_sub(s) + e.saturating_sub(end);
+                body_lost += s.saturating_sub(start) + end.saturating_sub(e);
+            }
+            // Tail bases left, and body bases removed along with a tail, per read.
+            // Body bases are lost when the body happens to end in A or start
+            // with T: those cannot be told apart from the tail.
+            let left = tail_left as f64 / n as f64;
+            let lost = body_lost as f64 / n as f64;
+            assert!(
+                left < 1.5,
+                "error rate {error_rate}: {left} tail bases left per read"
+            );
+            assert!(
+                lost < 1.5,
+                "error rate {error_rate}: {lost} body bases lost per read"
+            );
+        }
+    }
+
+    #[test]
+    fn reads_without_tails_are_left_alone() {
+        let mut rng = Rng(7);
+        let mut trimmed = 0;
+        for _ in 0..5000 {
+            let seq: Vec<u8> = (0..300).map(|_| rng.base()).collect();
+            if poly_trim(&seq, 10) != vec![(0, seq.len())] {
+                trimmed += 1;
+            }
+        }
+        // A run of ten-ish A's or T's at a read end is rare by chance.
+        assert!(
+            trimmed <= 5,
+            "{trimmed} of 5000 tailless reads were trimmed"
+        );
     }
 }
