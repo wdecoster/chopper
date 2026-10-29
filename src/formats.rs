@@ -10,7 +10,7 @@ use std::fmt;
 use std::io::{self, BufRead, Stdout, StdoutLock, Write};
 use std::num::NonZeroUsize;
 
-use bio::io::fastq;
+use crate::fastq;
 use clap::ValueEnum;
 use noodles_bam as bam;
 use noodles_bgzf as bgzf;
@@ -118,7 +118,10 @@ impl Input {
     pub fn into_records(self) -> Box<dyn Iterator<Item = RawRecord> + Send> {
         match self {
             Input::Fastq(reader) => Box::new(fastq::Reader::new(reader).records().map(|record| {
-                RawRecord::Fastq(record.expect("ERROR: problem parsing fastq record"))
+                RawRecord::Fastq(record.unwrap_or_else(|e| {
+                    eprintln!("Error: problem parsing FASTQ input at {e}");
+                    std::process::exit(1);
+                }))
             })),
             Input::Bam(mut reader, header) => Box::new(std::iter::from_fn(move || {
                 let mut record = RecordBuf::default();
@@ -148,8 +151,8 @@ impl InputRecord {
 
     /// The read name, for error messages.
     pub fn name(&self) -> &str {
-        let id = self.fastq.id();
-        id.split('\t').next().unwrap_or(id)
+        let header = self.fastq.header();
+        header.split(['\t', ' ']).next().unwrap_or(header)
     }
 }
 
@@ -483,7 +486,7 @@ mod tests {
         .collect();
         let fastq = bam_to_fastq(&ubam_record(data), TagText::All).unwrap();
         assert_eq!(
-            fastq.id(),
+            fastq.header(),
             "read1\tqs:f:12.5\tMM:Z:C+m?,0;\tML:B:C,200\tRG:Z:run1_model"
         );
         assert_eq!(fastq.seq(), b"ACGTC");
@@ -500,9 +503,9 @@ mod tests {
         .into_iter()
         .collect();
         let fastq = bam_to_fastq(&ubam_record(data), TagText::ModsOnly).unwrap();
-        assert_eq!(fastq.id(), "read1\tMM:Z:C+m?,0;\tMN:i:5");
+        assert_eq!(fastq.header(), "read1\tMM:Z:C+m?,0;\tMN:i:5");
         let fastq = bam_to_fastq(&ubam_record(Data::default()), TagText::None).unwrap();
-        assert_eq!(fastq.id(), "read1");
+        assert_eq!(fastq.header(), "read1");
     }
 
     #[test]

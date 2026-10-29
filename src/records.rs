@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::fmt;
 use std::io::{BufWriter, Write};
 
-use bio::io::fastq;
+use crate::fastq;
 use noodles_sam::alignment::{
     record::Flags,
     record_buf::{QualityScores, Sequence},
@@ -98,19 +98,6 @@ impl WritableRecord {
 /// Room reserved for the `_segment_N` suffix so the header needs one allocation.
 const SEGMENT_SUFFIX_CAPACITY: usize = 12;
 
-/// The header line as it was in the input, without the leading `@`.
-fn full_header(record: &fastq::Record) -> Cow<'_, str> {
-    // The fastq parser splits the header on the first space, which may fall
-    // inside a tag value, so SAM tags written as tab-separated fields
-    // (`samtools fastq -T MM,ML,...`) can end up spread across the id and the
-    // description. Reassemble the original header before picking it apart on
-    // tabs, so that every tag is seen wherever the space happened to land.
-    match record.desc() {
-        Some(d) => Cow::Owned(format!("{} {}", record.id(), d)),
-        None => Cow::Borrowed(record.id()),
-    }
-}
-
 /// Splits a header into the read name, the free text after it, and the
 /// tab-separated SAM tags.
 fn split_header(full: &str) -> (&str, Option<&str>, Option<&str>) {
@@ -137,8 +124,8 @@ fn record_to_string(
     segment_idx: usize,
     update_mods: bool,
 ) -> Result<String, ModTagError> {
-    let full = full_header(record);
-    let (name, name_rest, tags) = split_header(&full);
+    let full = record.header();
+    let (name, name_rest, tags) = split_header(full);
 
     let mut header = String::with_capacity(1 + full.len() + SEGMENT_SUFFIX_CAPACITY);
     header.push('@');
@@ -193,8 +180,8 @@ fn record_to_bam(
     update_mods: bool,
 ) -> Result<RecordBuf, RecordError> {
     let fastq = &record.fastq;
-    let full = full_header(fastq);
-    let (name, name_rest, tags) = split_header(&full);
+    let full = fastq.header();
+    let (name, name_rest, tags) = split_header(full);
 
     let fields: Vec<&str> = tags.map(|t| t.split('\t').collect()).unwrap_or_default();
     let fields: Vec<Cow<str>> = if update_mods {
@@ -265,7 +252,7 @@ fn record_to_bam(
 
 #[cfg(test)]
 mod tests {
-    use bio::io::fastq;
+    use crate::fastq;
 
     use crate::records::record_to_string;
 

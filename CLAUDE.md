@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 make ci                 # fmt-check + clippy + test, what CI runs
 make all                # fmt, clippy, test, build
-cargo test              # 62 unit tests + 12 end-to-end tests in tests/formats.rs
+cargo test              # 72 unit tests + 19 end-to-end tests in tests/formats.rs
 cargo test modtags      # one module
 cargo test untrimmed_range_is_unchanged   # one test by name substring
 cargo test -- --ignored # the 4 #[ignore]d end-to-end tests (see below)
@@ -41,14 +41,11 @@ This is why a new trimming approach only needs a `TrimStrategy` impl, and why `-
 
 **Output order is nondeterministic whenever `--threads > 1.`** Any test or before/after comparison of output bytes must either use `-t 1` or compare order-insensitively.
 
-### FASTQ header parsing is subtler than it looks
+### FASTQ parsing (`src/fastq.rs`)
 
-The `bio` crate splits a header on the **first space only** (`splitn(2, ' ')`, unchanged in bio 3 and 4). Consequences that have already caused bugs:
+chopper has its own FASTQ reader; it replaced the `bio` crate, which brought in about 60 crates for this one use. On well-formed input it must yield exactly what `bio` did (trailing whitespace trimmed from every line, CRLF accepted), and the v0.14.1 digest test guards that. On malformed input it is deliberately stricter or more lenient: mismatched sequence/quality lengths are an error (bio accepted them, then trimming panicked), wrapped records pair qualities by length, a one-line sequence takes exactly one quality line, empty reads and blank lines are accepted, and errors carry line numbers and exit 1 rather than panicking.
 
-- `samtools fastq -T MM,ML,MN` writes SAM tags as tab-separated fields, so with no space in the header the tags land inside `record.id()`, not `desc()`.
-- A tag *value* containing a space (`CO:Z:some comment`) splits mid-tag, pushing every later tag into `desc()`.
-
-`record_to_string` therefore reassembles id + desc into the original header before splitting on tabs, and appends the `_segment_N` suffix to the read name rather than to the end of the line. Keep that reassembly if you touch header handling; writing to the end of the line silently corrupts the last tag.
+The header is kept whole (`Record::header()`). SAM tags from `samtools fastq -T MM,ML,MN` follow the read name as tab-separated fields, and a tag value may contain spaces (`CO:Z:some comment`), so `split_header` (`src/records.rs`) splits on the first tab for the tags and then on the first space for the name. The `_segment_N` suffix goes on the read name, never at the end of the line: writing it there silently corrupts the last tag.
 
 ### Base modification tags (`src/modtags.rs`)
 

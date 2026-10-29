@@ -1,5 +1,5 @@
 use super::phred_score_to_probability;
-use bio::io::fastq;
+use crate::fastq;
 
 /// A trait for implementing custom read trimming strategies.
 ///
@@ -222,7 +222,7 @@ impl TrimStrategy for SplitByLowQualityStrategy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bio::io::fastq;
+    use crate::fastq;
 
     fn get_reads() -> [fastq::Record; 6] {
         [
@@ -355,7 +355,7 @@ mod tests {
                 "Failed for cutoff={}, min_length={}, read_id={}",
                 cutoff,
                 min_length,
-                read.id()
+                read.header()
             );
         }
     }
