@@ -14,6 +14,9 @@ On the other hand, trimming is performed using one of four approaches:
 
 * Splitting reads by low-quality segments and outputting high-quality parts.
 
+Optionally, poly(A) tails and poly(T) heads are removed from RNA and cDNA reads,
+see [Poly(A) tails](#polya-tails).
+
 Reads that pass the filters are printed to standard output (STDOUT), in the
 same format as the input unless `--output-format` says otherwise. See
 [Unaligned BAM](#unaligned-bam) for how BAM tags and headers are handled.
@@ -108,6 +111,9 @@ Trimming Options:
       --update-mods
           Recompute the base modification tags (MM, ML and MN), from unaligned BAM or as written by `samtools fastq -T MM,ML,MN`, so that they match the trimmed read. Only those tags are corrected; other position- or quality-dependent tags (qs, ns, ts, du, ...) are passed through unchanged and go stale. Reads whose tags are malformed or do not describe their sequence are reported as an error rather than written out with wrong coordinates
 
+      --trim-poly-tails [<MIN_LENGTH>]
+          Remove a poly(T) head from the start and a poly(A) tail from the end of each read (U counts as T), allowing up to 20% other bases in them. Runs shorter than MIN_LENGTH [default: 10] are left alone, since reads end in a few A's by chance. Tails must reach the end of the read (a few other bases past them are removed along with them, within that 20%), so remove adapters and primers first. Applied after --trim-approach, if any
+
 Setup Options:
   -t, --threads <THREADS>
           Use N parallel threads
@@ -194,6 +200,42 @@ than 254 characters, or containing `@` or spaces).
 
 BAM input is decompressed on a single thread. BAM output is compressed on a
 quarter of `--threads` (at least one) extra threads.
+
+## Poly(A) tails
+
+`--trim-poly-tails` removes a poly(T) head from the start and a poly(A) tail
+from the end of each read, as left by RNA and cDNA protocols (cDNA reads come in
+both orientations). It is off by default.
+
+```bash
+chopper --trim-poly-tails -i cdna_reads.fastq > trimmed.fastq
+# with quality trimming first, so that low-quality bases past a tail do not hide it
+chopper --trim-approach trim-by-quality --cutoff 10 --trim-poly-tails -i cdna_reads.fastq > trimmed.fastq
+```
+
+Tails are found the way cutadapt's `--poly-a` finds them: scanning in from the
+end of the read, each A (or T at the start) scores +1 and any other base -2, and
+the tail ends where the score peaks, provided at most 20% of it are other bases.
+That tolerates sequencing errors inside the tail without running on into the
+transcript. Runs shorter than 10 bases are left alone, since a read ends in a
+few A's by chance; give another minimum as `--trim-poly-tails 15`. U is treated as T.
+
+Two things to keep in mind:
+
+- **Tails must reach the end of the read.** Adapters and primers have to be
+  removed first, for example by the basecaller or `dorado trim`. A few
+  leftover bases past a tail are removed along with it, as long as the tail as
+  a whole stays within the 20%.
+- A body that happens to end in A or start with T loses those bases with the
+  tail, as they cannot be told apart from it.
+
+It is applied after `--trim-approach`, to the outer ends of the read only, and
+works with `--update-mods` and BAM output. As with the trimming approaches,
+filters see the untrimmed read and only `--minlength` is checked again afterwards.
+
+On simulated reads with ONT-like errors (half deletions, a quarter substitutions
+and a quarter insertions), at most 1.5 tail bases per read remained on average
+up to a 15% error rate, and 0.1% of reads without a tail were trimmed.
 
 ## Base modification tags
 

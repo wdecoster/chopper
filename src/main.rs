@@ -141,6 +141,23 @@ struct Cli {
     #[arg(long, help_heading = "Trimming Options")]
     update_mods: bool,
 
+    /// Remove a poly(T) head from the start and a poly(A) tail from the end of
+    /// each read (U counts as T), allowing up to 20% other bases in them.
+    /// Runs shorter than MIN_LENGTH [default: 10] are left alone, since reads
+    /// end in a few A's by chance. Tails must reach the end of the read (a few
+    /// other bases past them are removed along with them, within that 20%),
+    /// so remove adapters and primers first. Applied after --trim-approach,
+    /// if any.
+    #[arg(
+        long,
+        value_name = "MIN_LENGTH",
+        num_args = 0..=1,
+        default_missing_value = "10",
+        value_parser = clap::value_parser!(u64).range(1..),
+        help_heading = "Trimming Options"
+    )]
+    trim_poly_tails: Option<u64>,
+
     /// Use N parallel threads
     #[arg(
         short,
@@ -647,16 +664,19 @@ fn get_valid_segments(
     };
 
     if (valid_gc_p && valid_len && valid_qual && is_not_contam) ^ args.inverse {
-        if let Some(ref trimmer) = trimmer_strategy {
-            trimmer
-                .trim(record)
-                .into_iter()
-                // Verify minimum length for each segment
-                .filter(|&(start, end)| args.minlength <= end - start)
-                .collect()
-        } else {
-            vec![(0, record.seq().len())]
+        if trimmer_strategy.is_none() && args.trim_poly_tails.is_none() {
+            return vec![(0, record.seq().len())];
         }
+        let mut segments = match trimmer_strategy {
+            Some(trimmer) => trimmer.trim(record),
+            None => vec![(0, record.seq().len())],
+        };
+        if let Some(min_length) = args.trim_poly_tails {
+            PolyTailTrimmer::new(min_length as usize).trim_outer_ends(record.seq(), &mut segments);
+        }
+        // Verify minimum length for each segment
+        segments.retain(|&(start, end)| args.minlength <= end - start);
+        segments
     } else {
         vec![]
     }
@@ -828,6 +848,7 @@ mod tests {
             output_format: None,
             inverse: false,
             update_mods: false,
+            trim_poly_tails: None,
         }
     }
 
@@ -1129,6 +1150,7 @@ mod tests {
                 contam: None,
                 inverse: false,
                 update_mods: false,
+                trim_poly_tails: None,
                 input: None,
                 output_format: None,
                 mingc: Some(0.0),
@@ -1156,6 +1178,7 @@ mod tests {
                 contam: None,
                 inverse: false,
                 update_mods: false,
+                trim_poly_tails: None,
                 input: None,
                 output_format: None,
                 mingc: Some(0.0),
@@ -1183,6 +1206,7 @@ mod tests {
                 contam: None,
                 inverse: false,
                 update_mods: false,
+                trim_poly_tails: None,
                 input: None,
                 output_format: None,
                 mingc: Some(0.0),
@@ -1238,6 +1262,7 @@ mod tests {
                 contam: Some("test-data/random_contam.fa".to_owned()),
                 inverse: false,
                 update_mods: false,
+                trim_poly_tails: None,
                 input: None,
                 output_format: None,
                 mingc: Some(0.0),

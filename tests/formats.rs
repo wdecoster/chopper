@@ -579,3 +579,74 @@ fn multithreaded_ubam_split_with_update_mods_matches_one_thread() {
     assert!(one.len() > 6);
     assert_eq!(sorted(run(&[&["-t", "4"][..], &args].concat())), one);
 }
+
+/// A read with a poly(T) head and a poly(A) tail around a 20 base body that
+/// holds one C with a modification call, and 12 low-quality bases past the
+/// tail: too many for the tail's 20% error allowance to absorb.
+fn poly_tail_fastq() -> String {
+    let body = "GCAGTCAGTAGTGTGAGTCG";
+    let seq = format!("{}{body}{}GGTCGGTCGGTC", "T".repeat(15), "A".repeat(30));
+    let qual = format!("{}{}", "I".repeat(seq.len() - 12), "#".repeat(12));
+    // The body's second C (read position 15 + 7 = 22) carries the call: skip
+    // the body's first C.
+    format!("@polyread\tMM:Z:C+m?,1;\tML:B:C,200\n{seq}\n+\n{qual}\n")
+}
+
+#[test]
+fn poly_tails_are_trimmed_after_quality_trimming() {
+    let path = format!("{}/poly.fastq", env!("CARGO_TARGET_TMPDIR"));
+    std::fs::write(&path, poly_tail_fastq()).unwrap();
+    let args = [
+        "-t",
+        "1",
+        "-i",
+        &path,
+        "--trim-approach",
+        "trim-by-quality",
+        "--cutoff",
+        "10",
+        "--trim-poly-tails",
+        "--update-mods",
+    ];
+    let out = String::from_utf8(run(&args)).unwrap();
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines[1], "GCAGTCAGTAGTGTGAGTCG");
+    // The call moved with the trim: still on the body's second C.
+    assert_eq!(lines[0], "@polyread\tMM:Z:C+m?,1;\tML:B:C,200");
+
+    // Without quality trimming first, the junk after the tail means the tail
+    // does not reach the end of the read, so it stays.
+    let out = String::from_utf8(run(&["-t", "1", "-i", &path, "--trim-poly-tails"])).unwrap();
+    assert!(out.lines().nth(1).unwrap().ends_with("AAAAGGTCGGTCGGTC"));
+
+    // BAM output trims the same bases.
+    let (_, records) = read_bam(&run(&[&args[..], &["--output-format", "bam"]].concat()));
+    assert_eq!(records[0].sequence().as_ref(), b"GCAGTCAGTAGTGTGAGTCG");
+}
+
+#[test]
+fn trim_poly_tails_takes_an_optional_minimum_length() {
+    let path = format!("{}/poly_min.fastq", env!("CARGO_TARGET_TMPDIR"));
+    // A 12 base poly(A) tail: removed at the default minimum of 10, not at 15.
+    std::fs::write(
+        &path,
+        "@r1\nGCAGTCAGTCGG\nAAAAAAAAAAAA\n+\nIIIIIIIIIIII\nIIIIIIIIIIII\n",
+    )
+    .unwrap();
+    let seq = |args: &[&str]| {
+        let out = String::from_utf8(run(&[&["-t", "1", "-i", &path][..], args].concat())).unwrap();
+        out.lines().nth(1).unwrap().to_string()
+    };
+    assert_eq!(seq(&["--trim-poly-tails"]), "GCAGTCAGTCGG");
+    assert_eq!(
+        seq(&["--trim-poly-tails", "15"]),
+        "GCAGTCAGTCGGAAAAAAAAAAAA"
+    );
+    assert_eq!(seq(&["--trim-poly-tails=15"]), "GCAGTCAGTCGGAAAAAAAAAAAA");
+    // An option right after it is not taken as its value.
+    assert_eq!(seq(&["--trim-poly-tails", "-q", "5"]), "GCAGTCAGTCGG");
+    assert_eq!(seq(&[]), "GCAGTCAGTCGGAAAAAAAAAAAA");
+
+    let out = chopper(&["-i", &path, "--trim-poly-tails", "0"], None);
+    assert_eq!(out.status.code(), Some(2));
+}
