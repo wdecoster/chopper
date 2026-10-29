@@ -4,15 +4,16 @@ use crossbeam_channel::{Receiver, Select, Sender};
 use minimap2::*;
 use rayon::prelude::*;
 use std::error::Error;
-use std::io::{BufWriter, Read, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use records::WritableRecord;
+use formats::{Format, Input, InputRecord, OutputWriter, RawRecord, TagText};
+use records::{RecordError, WritableRecord};
 use trimmers::*;
 use utils::file_reader;
 
+mod formats;
 mod modtags;
 mod records;
 mod trimmers;
@@ -37,7 +38,7 @@ fn parse_gc_value(s: &str) -> Result<f64, String> {
 
 // The arguments end up in the Cli struct
 #[derive(Parser, Debug)]
-#[clap(author, version, about="Filtering and trimming of fastq files. Reads on stdin and writes to stdout.", long_about = None)]
+#[clap(author, version, about="Filtering and trimming of fastq or unaligned BAM files. Reads on stdin and writes to stdout.", long_about = None)]
 struct Cli {
     /// Sets a minimum Phred average quality score
     #[arg(
@@ -131,8 +132,8 @@ struct Cli {
     )]
     tailcrop: usize,
 
-    /// Recompute the base modification tags (MM, ML and MN) written by
-    /// `samtools fastq -T MM,ML,MN` so that they match the trimmed read.
+    /// Recompute the base modification tags (MM, ML and MN), from unaligned BAM
+    /// or as written by `samtools fastq -T MM,ML,MN`, so that they match the trimmed read.
     /// Only those tags are corrected; other position- or quality-dependent
     /// tags (qs, ns, ts, du, ...) are passed through unchanged and go stale.
     /// Reads whose tags are malformed or do not describe their sequence are
@@ -150,7 +151,9 @@ struct Cli {
     )]
     threads: usize,
 
-    /// Input filename [default: read from stdin]
+    /// Input filename [default: read from stdin].
+    /// FASTQ (optionally gzip, bzip2 or xz compressed) or unaligned BAM;
+    /// the format is detected from the contents.
     #[arg(
         short = 'i',
         long = "input",
@@ -158,6 +161,13 @@ struct Cli {
         help_heading = "Setup Options"
     )]
     input: Option<String>,
+
+    /// Output format [default: same as the input].
+    /// FASTQ output from BAM writes every BAM tag as a tab-separated SAM field
+    /// after the read name, like `samtools fastq -T '*'`.
+    /// BAM output keeps the input BAM header and tags, adding a @PG line.
+    #[arg(long, value_enum, help_heading = "Setup Options")]
+    output_format: Option<Format>,
 
     /// Output the opposite of the normal results
     #[arg(long, help_heading = "Setup Options")]
@@ -197,8 +207,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         .build_global()
         .expect("Error: Unable to build threadpool");
 
-    let mut reader = file_reader(args.input.as_ref())?;
-    filter(&mut reader, args);
+    let input = Input::detect(file_reader(args.input.as_ref())?)?;
+    filter(input, args);
 
     Ok(())
 }
@@ -330,22 +340,40 @@ fn abort_on_write_error(error: &std::io::Error) -> ! {
 /// Writing the read out with its original tags would attach modification
 /// coordinates to a sequence they no longer describe, so `--update-mods` treats
 /// this as fatal rather than passing corrupt data downstream.
-fn abort_on_mod_tag_error(record: &fastq::Record, error: &modtags::ModTagError) -> ! {
-    let name = record.id().split('\t').next().unwrap_or(record.id());
-    eprintln!("Error: cannot update base modification tags of read {name}: {error}");
-    eprintln!(
-        "Note: the output is incomplete. \
-         Rerun without --update-mods to write these tags through unchanged."
-    );
+fn abort_on_record_error(record: &InputRecord, error: &RecordError) -> ! {
+    let name = record.name();
+    match error {
+        RecordError::ModTags(error) => {
+            eprintln!("Error: cannot update base modification tags of read {name}: {error}");
+            eprintln!(
+                "Note: the output is incomplete. \
+                 Rerun without --update-mods to write these tags through unchanged."
+            );
+        }
+        RecordError::Bam(error) => {
+            eprintln!("Error: cannot write read {name} as BAM: {error}");
+            eprintln!("Note: the output is incomplete.");
+        }
+    }
     std::process::exit(1);
 }
 
-/// This function filters fastq on stdin based on quality, maxlength and minlength
-/// and applies trimming before writting to stdout
-fn filter<T>(input: &mut T, args: Cli)
-where
-    T: Read + std::marker::Send,
-{
+/// Reports an input read that cannot be processed and exits.
+fn abort_on_input_error(error: &str) -> ! {
+    eprintln!("Error: {error}");
+    std::process::exit(1);
+}
+
+/// Everything about the input and output formats that the filter loops need.
+struct Io {
+    output: Format,
+    tag_text: TagText,
+    header: Option<noodles_sam::Header>,
+}
+
+/// This function filters fastq or unaligned BAM on stdin based on quality, maxlength
+/// and minlength and applies trimming before writting to stdout
+fn filter(input: Input, args: Cli) {
     let aligner_option = if let Some(ref fas) = args.contam {
         is_file(fas)
             .unwrap_or_else(|_| panic!("Fasta file for filtering contaminants is invalid",));
@@ -357,9 +385,24 @@ where
 
     let trimmer_strategy = build_trimming_approach(&args);
 
+    let output = args.output_format.unwrap_or(input.format());
+    let header = match output {
+        Format::Bam => Some(
+            formats::output_header(input.header())
+                .unwrap_or_else(|e| abort_on_input_error(&format!("cannot build BAM header: {e}"))),
+        ),
+        Format::Fastq => None,
+    };
+    let io = Io {
+        output,
+        tag_text: TagText::new(output, args.update_mods),
+        header,
+    };
+    let records = input.into_records();
+
     match args.threads {
-        1 => sequential_filter(input, &args, &aligner_option, &trimmer_strategy),
-        _ => parallel_filter(input, &args, &aligner_option, &trimmer_strategy),
+        1 => sequential_filter(records, &args, &io, &aligner_option, &trimmer_strategy),
+        _ => parallel_filter(records, &args, &io, &aligner_option, &trimmer_strategy),
     }
 }
 
@@ -373,25 +416,26 @@ where
 ///
 /// If the record passes the filters, an optional trimming strategy can be applied
 /// (`trimmer_strategy`). Valid records are then written to the standard output.
-fn sequential_filter<T>(
-    input: &mut T,
+fn sequential_filter(
+    records: Box<dyn Iterator<Item = RawRecord> + Send>,
     args: &Cli,
+    io: &Io,
     aligner_option: &Option<Arc<Aligner<Built>>>,
     trimmer_strategy: &Option<Arc<dyn TrimStrategy + 'static>>,
-) where
-    T: Read + std::marker::Send,
-{
+) {
     let mut total_reads: usize = 0;
     let mut output_reads: usize = 0;
 
-    let stdout = std::io::stdout();
-    let mut writer = BufWriter::new(stdout.lock());
+    let mut writer = OutputWriter::new(io.output, io.header.as_ref(), 1)
+        .unwrap_or_else(|e| abort_on_write_error(&e));
 
-    fastq::Reader::new(input).records().for_each(|record| {
-        let record = record.expect("ERROR: problem parsing fastq record");
+    records.for_each(|record| {
+        let record =
+            InputRecord::new(record, io.tag_text).unwrap_or_else(|e| abort_on_input_error(&e));
         total_reads = total_reads.saturating_add(1);
 
-        let valid_segments = get_valid_segments(&record, args, aligner_option, trimmer_strategy);
+        let valid_segments =
+            get_valid_segments(&record.fastq, args, aligner_option, trimmer_strategy);
         valid_segments
             .iter()
             .enumerate()
@@ -403,18 +447,19 @@ fn sequential_filter<T>(
                     valid_segments.len(),
                     i,
                     args.update_mods,
+                    io.output,
                 )
-                .unwrap_or_else(|e| abort_on_mod_tag_error(&record, &e))
+                .unwrap_or_else(|e| abort_on_record_error(&record, &e))
             })
             .for_each(|writable_record| {
                 output_reads = output_reads.saturating_add(1);
-                writable_record
-                    .write_on_buffer(&mut writer)
+                writer
+                    .write(&writable_record)
                     .unwrap_or_else(|e| abort_on_write_error(&e));
             });
     });
 
-    writer.flush().unwrap_or_else(|e| abort_on_write_error(&e));
+    writer.finish().unwrap_or_else(|e| abort_on_write_error(&e));
     eprintln!("Kept {output_reads} reads out of {total_reads} reads");
     warn_if_no_mods_seen(args);
 }
@@ -429,14 +474,13 @@ fn sequential_filter<T>(
 ///
 /// If the record passes the filters, an optional trimming strategy can be applied
 /// (`trimmer_strategy`). Valid records are then written to the standard output.
-fn parallel_filter<T>(
-    input: &mut T,
+fn parallel_filter(
+    records: Box<dyn Iterator<Item = RawRecord> + Send>,
     args: &Cli,
+    io: &Io,
     aligner_option: &Option<Arc<Aligner<Built>>>,
     trimmer_strategy: &Option<Arc<dyn TrimStrategy + 'static>>,
-) where
-    T: Read + std::marker::Send,
-{
+) {
     let total_reads_ = Arc::new(AtomicUsize::new(0));
     let output_reads_ = Arc::new(AtomicUsize::new(0));
     let output_reads_2 = Arc::clone(&output_reads_);
@@ -447,8 +491,8 @@ fn parallel_filter<T>(
     rayon::scope(|s| {
         s.spawn(move |_| {
             let mut read_counter: usize = 0;
-            let stdout = std::io::stdout();
-            let mut writer = BufWriter::new(stdout.lock());
+            let mut writer = OutputWriter::new(io.output, io.header.as_ref(), args.threads)
+                .unwrap_or_else(|e| abort_on_write_error(&e));
 
             let mut sel = Select::new();
             for r in &receivers {
@@ -465,8 +509,8 @@ fn parallel_filter<T>(
                 match res {
                     Ok(writable_records) => {
                         for writable_record in writable_records {
-                            writable_record
-                                .write_on_buffer(&mut writer)
+                            writer
+                                .write(&writable_record)
                                 .unwrap_or_else(|e| abort_on_write_error(&e));
                             read_counter += 1;
                         }
@@ -483,56 +527,55 @@ fn parallel_filter<T>(
                 }
             }
 
-            writer.flush().unwrap_or_else(|e| abort_on_write_error(&e));
+            writer.finish().unwrap_or_else(|e| abort_on_write_error(&e));
             output_reads_2.fetch_add(read_counter, Ordering::Relaxed);
         });
 
         s.spawn(|_| {
-            fastq::Reader::new(input)
-                .records()
-                .par_bridge()
-                .for_each_init(
-                    || {
-                        // Return an Option with a Sender that will be used only by one worker
-                        if let Ok(mut senders_guard) = senders.lock() {
-                            senders_guard.pop()
-                        } else {
-                            None
-                        }
-                    },
-                    |sender, record| {
-                        let record = record.expect("ERROR: problem parsing fastq record");
-                        total_reads_.fetch_add(1, Ordering::Relaxed);
+            records.par_bridge().for_each_init(
+                || {
+                    // Return an Option with a Sender that will be used only by one worker
+                    if let Ok(mut senders_guard) = senders.lock() {
+                        senders_guard.pop()
+                    } else {
+                        None
+                    }
+                },
+                |sender, record| {
+                    let record = InputRecord::new(record, io.tag_text)
+                        .unwrap_or_else(|e| abort_on_input_error(&e));
+                    total_reads_.fetch_add(1, Ordering::Relaxed);
 
-                        let valid_segments =
-                            get_valid_segments(&record, args, aligner_option, trimmer_strategy);
-                        let valid_segments = valid_segments
-                            .iter()
-                            .enumerate()
-                            .map(|(i, (start, end))| {
-                                WritableRecord::new(
-                                    &record,
-                                    *start,
-                                    *end,
-                                    valid_segments.len(),
-                                    i,
-                                    args.update_mods,
-                                )
-                                .unwrap_or_else(|e| abort_on_mod_tag_error(&record, &e))
-                            })
-                            .collect();
+                    let valid_segments =
+                        get_valid_segments(&record.fastq, args, aligner_option, trimmer_strategy);
+                    let valid_segments = valid_segments
+                        .iter()
+                        .enumerate()
+                        .map(|(i, (start, end))| {
+                            WritableRecord::new(
+                                &record,
+                                *start,
+                                *end,
+                                valid_segments.len(),
+                                i,
+                                args.update_mods,
+                                io.output,
+                            )
+                            .unwrap_or_else(|e| abort_on_record_error(&record, &e))
+                        })
+                        .collect();
 
-                        if let Some(ref s) = sender {
-                            // It's not necessary to handle this, because the receiver remains pending
-                            // until the last record has been processed.
-                            let _ = s.send(valid_segments);
-                        } else {
-                            // This case should not happen unless the number of receivers is set to be less than the number of threads.
-                            // (see: https://users.rust-lang.org/t/what-is-the-expected-behavior-of-for-each-init-with-par-bridge-in-rayon/134136/5?u=millarcd)
-                            eprintln!("Error: failed to send the read for writing");
-                        }
-                    },
-                );
+                    if let Some(ref s) = sender {
+                        // It's not necessary to handle this, because the receiver remains pending
+                        // until the last record has been processed.
+                        let _ = s.send(valid_segments);
+                    } else {
+                        // This case should not happen unless the number of receivers is set to be less than the number of threads.
+                        // (see: https://users.rust-lang.org/t/what-is-the-expected-behavior-of-for-each-init-with-par-bridge-in-rayon/134136/5?u=millarcd)
+                        eprintln!("Error: failed to send the read for writing");
+                    }
+                },
+            );
         });
     });
 
@@ -752,6 +795,10 @@ mod tests {
         }
     }
 
+    fn open_input(path: &str) -> Input {
+        Input::detect(file_reader(Some(path)).unwrap()).unwrap()
+    }
+
     fn make_record(seq: &str, qual: &str) -> fastq::Record {
         fastq::Record::with_attrs("read1", None, seq.as_bytes(), qual.as_bytes())
     }
@@ -772,6 +819,7 @@ mod tests {
             tailcrop: 0,
             threads: 1,
             input: None,
+            output_format: None,
             inverse: false,
             update_mods: false,
         }
@@ -1060,7 +1108,7 @@ mod tests {
     #[test]
     fn test_filter() {
         filter(
-            &mut std::fs::File::open("test-data/test.fastq").unwrap(),
+            open_input("test-data/test.fastq"),
             Cli {
                 minlength: 100,
                 maxlength: 100000,
@@ -1076,6 +1124,7 @@ mod tests {
                 inverse: false,
                 update_mods: false,
                 input: None,
+                output_format: None,
                 mingc: Some(0.0),
                 maxgc: Some(1.0),
             },
@@ -1086,7 +1135,7 @@ mod tests {
     #[test]
     fn test_filter_with_trim_by_quality_approach() {
         filter(
-            &mut std::fs::File::open("test-data/test.fastq").unwrap(),
+            open_input("test-data/test.fastq"),
             Cli {
                 minlength: 100,
                 maxlength: 100000,
@@ -1102,6 +1151,7 @@ mod tests {
                 inverse: false,
                 update_mods: false,
                 input: None,
+                output_format: None,
                 mingc: Some(0.0),
                 maxgc: Some(1.0),
             },
@@ -1112,7 +1162,7 @@ mod tests {
     #[test]
     fn test_filter_with_best_read_segment_approach() {
         filter(
-            &mut std::fs::File::open("test-data/test.fastq").unwrap(),
+            open_input("test-data/test.fastq"),
             Cli {
                 minlength: 100,
                 maxlength: 100000,
@@ -1128,6 +1178,7 @@ mod tests {
                 inverse: false,
                 update_mods: false,
                 input: None,
+                output_format: None,
                 mingc: Some(0.0),
                 maxgc: Some(1.0),
             },
@@ -1162,7 +1213,7 @@ mod tests {
     #[test]
     fn test_filter_with_contam() {
         filter(
-            &mut std::fs::File::open("test-data/test.fastq").unwrap(),
+            open_input("test-data/test.fastq"),
             Cli {
                 minlength: 100,
                 maxlength: 100000,
@@ -1178,6 +1229,7 @@ mod tests {
                 inverse: false,
                 update_mods: false,
                 input: None,
+                output_format: None,
                 mingc: Some(0.0),
                 maxgc: Some(1.0),
             },

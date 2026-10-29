@@ -1,0 +1,25 @@
+# SHA-256 of chopper v0.14.1's stdout for each command line, run from the
+# repository root. Checked by tests/formats.rs: FASTQ in, FASTQ out must stay
+# byte-identical to the release.
+#
+# <sha256>  <mode>  <arguments>
+#   exact   output compared as is
+#   sorted  output of a multi-threaded run, records sorted before hashing
+#   stdin   test-data/test.fastq fed on stdin instead of -i
+#
+# Regenerate (only when a FASTQ output change is intended) with the released
+# binary, e.g. for an `exact` line: chopper <arguments> | sha256sum
+11cdf042987ffbf2b877224231414fc40de3ecb8769b6337d3909a267004ba12  exact  -t 1 -i test-data/test.fastq
+3570e2793af4a02a3a1ccc429f554539512cb865de7da9a2545db6c75a6e4b17  exact  -t 1 -i test-data/test.fastq -q 10 -l 500
+c07e3951a19c2cb0ba439ac99d682767444f7df264c0f54fbf9d7acfa6581069  exact  -t 1 -i test-data/test.fastq --maxlength 5000 --mingc 0.4 --maxgc 0.6
+de39f4c53e74a0ea7e2386fa4a57c53af44926a3f975171ce2885c04aab17dd9  exact  -t 1 -i test-data/test.fastq --trim-approach fixed-crop --headcrop 50 --tailcrop 50
+56636c0ff689149e385379ac88e842226c3dc21ec4eaa2fed840114e65f9e06b  exact  -t 1 -i test-data/test.fastq --trim-approach trim-by-quality --cutoff 10
+08871ee0ad0f6d851f67265f13a5fb1b49fa82a3f3c16c3dfa11e474ccbf6c77  exact  -t 1 -i test-data/test.fastq --trim-approach best-read-segment --cutoff 10 -l 100
+f16ede1f192f6ee04c720395ec4c97353df224a472051f7fcc6767d41995f32d  exact  -t 1 -i test-data/test.fastq --trim-approach split-by-low-quality --cutoff 10 -l 50 --split-window 3
+3eedc13f73a9da725fd5d6b9e58cc6b6392dfa09339cef00532398481570e82d  exact  -t 1 -i test-data/test.fastq --inverse -q 12
+5703d4165f77f644d8e24c64401ffafbbb80bcd9c76569bbdf15f6001c892762  exact  -t 1 -i test-data/test.fastq -c test-data/random_contam.fa -l 100
+68d078f0083a0e4b2c70984825d9b6f86f2e04794069ffe625b8733065e4f340  exact  -t 1 -i test-data/ubam/reads.fastq
+fd1435dc1f641246d0d28f60eddd3118b341f5ec224c18d453f23b38389f1f82  exact  -t 1 -i test-data/ubam/reads.fastq --trim-approach fixed-crop --headcrop 3 --tailcrop 2 --update-mods
+e88766cbd41e43f96e3f17590d64ba04254578508770db37498d04dae153d1d5  exact  -t 1 -i test-data/ubam/reads.fastq --trim-approach split-by-low-quality --cutoff 8 -l 10 --update-mods
+118360bc1c366b5592cba556678df41e8bec8c0909f58d325076f22ff4738cb6  sorted  -t 4 -i test-data/test.fastq --trim-approach split-by-low-quality --cutoff 10 -l 50
+844a76402b4ee1cb5b56f96c6f8ea1fb9eb777aa8a740bfe3579ddd7d0d08ae9  stdin  -t 1 -q 10

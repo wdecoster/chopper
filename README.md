@@ -1,6 +1,6 @@
 # chopper
 
-Rust implementation of [NanoFilt](https://github.com/wdecoster/nanofilt)+[NanoLyse](https://github.com/wdecoster/nanolyse), both originally written in Python. This tool, intended for long read sequencing such as PacBio or ONT, filters and trims a fastq file.  
+Rust implementation of [NanoFilt](https://github.com/wdecoster/nanofilt)+[NanoLyse](https://github.com/wdecoster/nanolyse), both originally written in Python. This tool, intended for long read sequencing such as PacBio or ONT, filters and trims a fastq or unaligned BAM (uBAM) file.  
 
 Filtering is based on average read quality, minimum or maximum read length, and GC content percentage.
 
@@ -14,7 +14,9 @@ On the other hand, trimming is performed using one of four approaches:
 
 * Splitting reads by low-quality segments and outputting high-quality parts.
 
-Reads that pass the filters are printed to standard output (STDOUT).
+Reads that pass the filters are printed to standard output (STDOUT), in the
+same format as the input unless `--output-format` says otherwise. See
+[Unaligned BAM](#unaligned-bam) for how BAM tags and headers are handled.
 
 Base modification tags (`MM`/`ML`) carried over from a modified-basecalled BAM can
 be kept in step with the trimming with `--update-mods`, see
@@ -32,7 +34,8 @@ Alternatively, use conda to install
 
 ## Usage
 
-Reads on stdin and writes to stdout.
+Reads on stdin and writes to stdout. The input format (FASTQ or unaligned BAM)
+is detected from the contents.
 
 ```text
 Usage: chopper [OPTIONS]
@@ -103,7 +106,7 @@ Trimming Options:
           [default: 0]
 
       --update-mods
-          Recompute the base modification tags (MM, ML and MN) written by `samtools fastq -T MM,ML,MN` so that they match the trimmed read. Only those tags are corrected; other position- or quality-dependent tags (qs, ns, ts, du, ...) are passed through unchanged and go stale. Reads whose tags are malformed or do not describe their sequence are reported as an error rather than written out with wrong coordinates
+          Recompute the base modification tags (MM, ML and MN), from unaligned BAM or as written by `samtools fastq -T MM,ML,MN`, so that they match the trimmed read. Only those tags are corrected; other position- or quality-dependent tags (qs, ns, ts, du, ...) are passed through unchanged and go stale. Reads whose tags are malformed or do not describe their sequence are reported as an error rather than written out with wrong coordinates
 
 Setup Options:
   -t, --threads <THREADS>
@@ -112,7 +115,14 @@ Setup Options:
           [default: 4]
 
   -i, --input <INPUT>
-          Input filename [default: read from stdin]
+          Input filename [default: read from stdin]. FASTQ (optionally gzip, bzip2 or xz compressed) or unaligned BAM; the format is detected from the contents
+
+      --output-format <OUTPUT_FORMAT>
+          Output format [default: same as the input]. FASTQ output from BAM writes every BAM tag as a tab-separated SAM field after the read name, like `samtools fastq -T '*'`. BAM output keeps the input BAM header and tags, adding a @PG line
+
+          Possible values:
+          - fastq
+          - bam:   Unaligned BAM
 
       --inverse
           Output the opposite of the normal results
@@ -141,11 +151,50 @@ chopper --trim-approach split-by-low-quality --cutoff 15 --split-window 5 -l 50 
 samtools fastq -T MM,ML,MN reads.bam \
   | chopper --trim-approach fixed-crop --headcrop 20 --tailcrop 20 --update-mods \
   > trimmed_reads.fastq
+
+# Unaligned BAM straight from dorado: filter and trim, write uBAM
+chopper -q 10 -l 500 -i calls.bam > filtered.bam
+chopper --trim-approach fixed-crop --headcrop 20 --tailcrop 20 --update-mods -i calls.bam > trimmed.bam
+
+# uBAM in, FASTQ out (every BAM tag kept as a SAM field in the header)
+chopper -q 10 -i calls.bam --output-format fastq > filtered.fastq
 ```
+
+## Unaligned BAM
+
+chopper reads unaligned BAM (as written by dorado and other ONT basecallers) as
+well as FASTQ, from a file or on stdin, and detects which one it got. Output is
+in the same format as the input; `--output-format fastq` or `--output-format bam`
+converts. Filtering and trimming are exactly the same for both formats.
+
+What happens to the header and tags:
+
+| Input → output | Header | Tags |
+|---|---|---|
+| uBAM → uBAM | Passed through unchanged (`@HD`, `@RG`, `@PG`, `@CO`, ...), with a `@PG` line for chopper chained after the last program | Every tag is kept with its exact type and in its original order. Only the read name (`_segment_N` suffix when split), sequence and qualities change, plus `MM`/`ML`/`MN` under `--update-mods`. Flags are kept |
+| uBAM → FASTQ | Not written (FASTQ has none) | Every tag is written as a tab-separated SAM field after the read name, as `samtools fastq -T '*'` does |
+| FASTQ → uBAM | Built: `@HD VN:1.6 SO:unknown` and a `@PG` line for chopper | Tab-separated SAM fields after the read name become typed BAM tags; integers get the smallest fitting type, as htslib does. Free text after the read name (e.g. `runid=... ch=...`) is kept in a `CO:Z:` tag. Records get flag 4 (unmapped) |
+| FASTQ → FASTQ | — | Unchanged from earlier releases, byte for byte |
+
+No tag is ever dropped. The usual caveats still apply: tags that trimming
+invalidates other than `MM`/`ML`/`MN` (`qs`, `ns`, `ts`, `du`, `mv`, ...) are
+kept as they are and go stale, see [Base modification tags](#base-modification-tags).
+A FASTQ round trip through BAM does not keep integer widths, since SAM text has
+a single integer type, and an `RG:Z:` tag from FASTQ does not get a matching
+`@RG` header line.
+
+chopper stops with an error rather than write something wrong when the BAM
+holds an aligned read (trimming would invalidate its position and CIGAR, and a
+reverse-strand read is stored reverse complemented), a read without base
+qualities, or when FASTQ header fields after a tab are not valid SAM tags.
+
+BAM input is decompressed on a single thread; BAM output is compressed on
+`--threads` threads.
 
 ## Base modification tags
 
-Modified basecalls from dorado are carried into fastq as SAM tags:
+Modified basecalls from dorado are carried in the unaligned BAM, which chopper
+reads directly, or into fastq as SAM tags:
 
 ```bash
 samtools fastq -T MM,ML,MN reads.bam > reads.fastq
