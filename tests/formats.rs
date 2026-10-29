@@ -12,7 +12,8 @@ use noodles_bam as bam;
 use noodles_sam::{
     self as sam,
     alignment::{
-        record::data::field::Tag,
+        io::Write as _,
+        record::{data::field::Tag, Flags},
         record_buf::{data::field::Value, RecordBuf},
     },
 };
@@ -371,4 +372,208 @@ fn aligned_bam_is_rejected() {
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("read mapped1 is aligned"), "{stderr}");
+}
+
+/// Writes a BAM file into the test's temporary directory and returns its path.
+fn write_bam(name: &str, header: &sam::Header, records: &[RecordBuf]) -> String {
+    let path = format!("{}/{name}", env!("CARGO_TARGET_TMPDIR"));
+    let mut writer = bam::io::Writer::new(std::fs::File::create(&path).unwrap());
+    writer.write_header(header).unwrap();
+    for record in records {
+        writer.write_alignment_record(header, record).unwrap();
+    }
+    writer.try_finish().unwrap();
+    path
+}
+
+/// The fixture's header with its text edited, for headers noodles would not build.
+fn fixture_header_with(edit: impl Fn(String) -> String) -> sam::Header {
+    let (header, _) = fixture_bam();
+    let mut text = Vec::new();
+    sam::io::Writer::new(&mut text)
+        .write_header(&header)
+        .unwrap();
+    edit(String::from_utf8(text).unwrap())
+        .parse()
+        .expect("edited header parses")
+}
+
+fn program_ids(header: &sam::Header) -> Vec<String> {
+    header
+        .programs()
+        .as_ref()
+        .keys()
+        .map(|k| k.to_string())
+        .collect()
+}
+
+#[test]
+fn a_dangling_previous_program_does_not_stop_bam_output() {
+    // `PP` naming a program that is not in the header makes noodles panic
+    // while chaining a new @PG line.
+    let header = fixture_header_with(|h| h.replace("PP:basecaller", "PP:missing"));
+    let path = write_bam("dangling_pp.bam", &header, &fixture_bam().1);
+    let (out_header, records) = read_bam(&run(&["-t", "1", "-i", &path]));
+    assert_eq!(records, fixture_bam().1);
+    assert_eq!(
+        program_ids(&out_header),
+        ["basecaller", "samtools", "chopper"]
+    );
+    let chopper = &out_header.programs().as_ref()[&b"chopper"[..]];
+    assert!(!chopper
+        .other_fields()
+        .iter()
+        .any(|(k, _)| k.as_ref() == b"PP"));
+}
+
+#[test]
+fn sort_order_is_only_kept_when_output_order_is() {
+    let header = fixture_header_with(|h| h.replace("SO:unknown", "SO:queryname\tGO:query"));
+    let path = write_bam("queryname.bam", &header, &fixture_bam().1);
+    let sort_fields = |args: &[&str]| {
+        let (header, _) = read_bam(&run(&[&["-i", &path][..], args].concat()));
+        let hd = header.header().unwrap().other_fields();
+        let get = |t: &[u8; 2]| {
+            hd.iter()
+                .find(|(k, _)| k.as_ref() == t)
+                .map(|(_, v)| v.to_string())
+        };
+        (get(b"SO"), get(b"GO"))
+    };
+    let kept = (Some("queryname".to_string()), Some("query".to_string()));
+    let dropped = (Some("unsorted".to_string()), None);
+    assert_eq!(sort_fields(&["-t", "1"]), kept);
+    assert_eq!(sort_fields(&["-t", "4"]), dropped);
+    assert_eq!(
+        sort_fields(&[
+            "-t",
+            "1",
+            "--trim-approach",
+            "split-by-low-quality",
+            "--cutoff",
+            "8"
+        ]),
+        dropped
+    );
+}
+
+#[test]
+fn secondary_supplementary_and_reverse_records_are_rejected() {
+    let (header, records) = fixture_bam();
+    for (flag, expected) in [
+        (0x4 | 0x100, "secondary or supplementary"),
+        (0x4 | 0x800, "secondary or supplementary"),
+        (0x4 | 0x10, "reverse complemented"),
+    ] {
+        let mut record = records[0].clone();
+        *record.flags_mut() = Flags::from(flag);
+        let path = write_bam(&format!("flag_{flag}.bam"), &header, &[record]);
+        let out = chopper(&["-i", &path], None);
+        assert_eq!(out.status.code(), Some(1), "flag {flag}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.contains(expected), "flag {flag}: {stderr}");
+    }
+}
+
+#[test]
+fn a_read_name_bam_cannot_hold_is_reported_with_the_read() {
+    let dir = env!("CARGO_TARGET_TMPDIR");
+    let long = "r".repeat(300);
+    for (file, name) in [("long_name.fastq", long.as_str()), ("empty_name.fastq", "")] {
+        let path = format!("{dir}/{file}");
+        std::fs::write(&path, format!("@{name}\nACGT\n+\nIIII\n")).unwrap();
+        let out = chopper(&["-i", &path, "--output-format", "bam"], None);
+        assert_eq!(out.status.code(), Some(1));
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.contains("is not a valid BAM read name"), "{stderr}");
+        assert!(!stderr.contains("failed to write output"), "{stderr}");
+    }
+}
+
+#[test]
+fn gzipped_fastq_is_read_from_a_file_and_from_stdin() {
+    let plain = std::fs::read(TAGGED_FASTQ).unwrap();
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    gz.write_all(&plain).unwrap();
+    let gz = gz.finish().unwrap();
+    let path = format!("{}/reads.fastq.gz", env!("CARGO_TARGET_TMPDIR"));
+    std::fs::write(&path, &gz).unwrap();
+
+    let expected = run(&["-t", "1", "-i", TAGGED_FASTQ]);
+    assert_eq!(run(&["-t", "1", "-i", &path]), expected);
+    let out = chopper(&["-t", "1"], Some(&gz));
+    assert!(out.status.success());
+    assert_eq!(out.stdout, expected);
+}
+
+#[test]
+fn legacy_mm_ml_spelling_is_rewritten_in_place_in_bam() {
+    // Pre-standard dorado wrote Mm/Ml; rename the fixture's tags to those.
+    let (header, records) = fixture_bam();
+    let legacy: Vec<RecordBuf> = records
+        .iter()
+        .map(|r| {
+            let mut r = r.clone();
+            let data = r
+                .data()
+                .iter()
+                .map(|(t, v)| match t.as_ref() {
+                    b"MM" => (tag(b"Mm"), v.clone()),
+                    b"ML" => (tag(b"Ml"), v.clone()),
+                    _ => (t, v.clone()),
+                })
+                .collect();
+            *r.data_mut() = data;
+            r
+        })
+        .collect();
+    let path = write_bam("legacy_mods.bam", &header, &legacy);
+    let crop = [
+        "-t",
+        "1",
+        "--trim-approach",
+        "fixed-crop",
+        "--headcrop",
+        "7",
+        "--tailcrop",
+        "5",
+        "--update-mods",
+    ];
+    let (_, from_legacy) = read_bam(&run(&[&["-i", &path][..], &crop].concat()));
+    let (_, from_standard) = read_bam(&run(&[&["-i", UBAM][..], &crop].concat()));
+    for (legacy, standard) in from_legacy.iter().zip(&from_standard) {
+        assert!(legacy.data().get(&tag(b"MM")).is_none());
+        assert_eq!(legacy.data().len(), standard.data().len());
+        assert_eq!(
+            legacy.data().get(&tag(b"Mm")),
+            standard.data().get(&tag(b"MM"))
+        );
+        assert_eq!(
+            legacy.data().get(&tag(b"Ml")),
+            standard.data().get(&tag(b"ML"))
+        );
+    }
+}
+
+#[test]
+fn multithreaded_ubam_split_with_update_mods_matches_one_thread() {
+    let sorted = |bytes: Vec<u8>| {
+        let (_, mut records) = read_bam(&bytes);
+        records.sort_by(|a, b| a.name().cmp(&b.name()));
+        records
+    };
+    let args = [
+        "-i",
+        UBAM,
+        "--trim-approach",
+        "split-by-low-quality",
+        "--cutoff",
+        "8",
+        "-l",
+        "10",
+        "--update-mods",
+    ];
+    let one = sorted(run(&[&["-t", "1"][..], &args].concat()));
+    assert!(one.len() > 6);
+    assert_eq!(sorted(run(&[&["-t", "4"][..], &args].concat())), one);
 }

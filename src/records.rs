@@ -240,6 +240,18 @@ fn record_to_bam(
         new_name.push_str("_segment_");
         new_name.push_str(&(segment_idx + 1).to_string());
     }
+    // QNAME in SAM is `[!-?A-~]{1,254}`; check here so the error names the read
+    // instead of surfacing from the BAM writer as a failure to write output.
+    let valid_name = (1..=254).contains(&new_name.len())
+        && new_name
+            .bytes()
+            .all(|b| matches!(b, b'!'..=b'?' | b'A'..=b'~'));
+    if !valid_name {
+        return Err(RecordError::Bam(format!(
+            "'{new_name}' is not a valid BAM read name \
+             (1 to 254 printable characters, no '@' or spaces)"
+        )));
+    }
     *out.name_mut() = Some(new_name.into());
     *out.sequence_mut() = Sequence::from(fastq.seq()[start..end].to_vec());
     let qual = fastq.qual()[start..end]

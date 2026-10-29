@@ -161,9 +161,28 @@ fn bam_to_fastq(record: &RecordBuf, tag_text: TagText) -> Result<fastq::Record, 
         .unwrap_or_else(|| "*".to_string());
     // An aligned record may be reverse complemented and carries a CIGAR and
     // position that trimming would invalidate. Neither can be handled here.
-    if !record.flags().is_unmapped() {
+    let flags = record.flags();
+    if !flags.is_unmapped() {
         return Err(format!(
             "read {name} is aligned; only unaligned BAM is supported as input"
+        ));
+    }
+    // A secondary or supplementary record repeats (part of) a read that is
+    // also in the file as a primary record, and would be written out twice.
+    if flags.is_secondary() || flags.is_supplementary() {
+        return Err(format!(
+            "read {name} is a secondary or supplementary record (flag {}); \
+             only unaligned BAM is supported as input",
+            u16::from(flags)
+        ));
+    }
+    // A reverse-strand record is stored reverse complemented, and its MM tag
+    // counts bases on the original strand, which trimming here cannot follow.
+    if flags.is_reverse_complemented() {
+        return Err(format!(
+            "read {name} is flagged as reverse complemented (flag {}); \
+             only unaligned BAM is supported as input",
+            u16::from(flags)
         ));
     }
     let seq = record.sequence().as_ref();
@@ -241,6 +260,9 @@ fn tags_to_text(data: &Data, keep: impl Fn(&Tag) -> bool) -> Result<Vec<String>,
 /// Integers get the smallest type that holds them, as htslib does when it
 /// converts SAM.
 pub fn text_to_tags<S: AsRef<str>>(fields: &[S]) -> Result<Data, String> {
+    if fields.is_empty() {
+        return Ok(Data::default());
+    }
     let error = |e: &dyn fmt::Display| {
         let fields: Vec<&str> = fields.iter().map(AsRef::as_ref).collect();
         format!("'{}' are not valid SAM tags: {e}", fields.join("\t"))
@@ -302,7 +324,11 @@ fn empty_array(field: &str) -> Option<(Tag, Value)> {
 
 /// The header for BAM output: the input's header when it was BAM, a minimal
 /// one otherwise, with a `@PG` line for this run appended to the chain.
-pub fn output_header(input: Option<&sam::Header>) -> io::Result<sam::Header> {
+///
+/// `order_kept` says whether the records come out in input order with their
+/// names unchanged. Otherwise a sort or grouping order the input declared no
+/// longer holds, and the header says `SO:unsorted` instead.
+pub fn output_header(input: Option<&sam::Header>, order_kept: bool) -> io::Result<sam::Header> {
     let mut header = match input {
         Some(header) => header.clone(),
         None => {
@@ -320,8 +346,46 @@ pub fn output_header(input: Option<&sam::Header>) -> io::Result<sam::Header> {
         .insert(program::tag::COMMAND_LINE, command_line.join(" "))
         .build()
         .map_err(io::Error::other)?;
-    header.programs_mut().add("chopper", pg)?;
+    add_program(header.programs_mut(), pg);
+
+    if !order_kept {
+        if let Some(hd) = header.header_mut() {
+            let fields = hd.other_fields_mut();
+            if fields.contains_key(&map::header::tag::SORT_ORDER) {
+                fields.insert(map::header::tag::SORT_ORDER, "unsorted".into());
+            }
+            fields.shift_remove(&map::header::tag::GROUP_ORDER);
+            fields.shift_remove(&map::header::tag::SUBSORT_ORDER);
+        }
+    }
     Ok(header)
+}
+
+/// Adds chopper's `@PG` line, chained after the last program(s) when the
+/// existing chain allows it.
+///
+/// A `PP` that names a missing program (common after merging or reheadering)
+/// makes noodles panic while it looks for the end of the chain, and a cyclic
+/// chain has no end at all. In either case the line is added without a `PP`,
+/// so a damaged header does not stop a run that does not depend on it.
+fn add_program(programs: &mut sam::header::Programs, pg: Map<Program>) {
+    let ids = programs.as_ref();
+    let chain_intact = ids.values().all(|map| {
+        map.other_fields()
+            .get(&program::tag::PREVIOUS_PROGRAM_ID)
+            .is_none_or(|pp| ids.contains_key(pp))
+    });
+    if chain_intact && programs.add("chopper", pg.clone()).is_ok() {
+        return;
+    }
+    let ids = programs.as_mut();
+    let mut id = String::from("chopper");
+    let mut n = 0;
+    while ids.contains_key(id.as_bytes()) {
+        n += 1;
+        id = format!("chopper.{n}");
+    }
+    ids.insert(id.into(), pg);
 }
 
 /// Where kept reads go: FASTQ text or BGZF-compressed BAM, both on stdout.
@@ -337,14 +401,18 @@ pub enum OutputWriter {
 
 impl OutputWriter {
     /// For BAM, writes the header straight away, so that a run that keeps no
-    /// reads still produces a valid, empty BAM file. `threads` is the number
-    /// of BGZF compression workers.
+    /// reads still produces a valid, empty BAM file.
+    ///
+    /// BGZF compression gets a quarter of `threads` (at least one) on top of
+    /// the filtering threads, rather than as many again: compressing is
+    /// cheaper than filtering, and the total stays close to what `--threads`
+    /// asks for.
     pub fn new(format: Format, header: Option<&sam::Header>, threads: usize) -> io::Result<Self> {
         match format {
             Format::Fastq => Ok(OutputWriter::Fastq(io::BufWriter::new(io::stdout().lock()))),
             Format::Bam => {
                 let header = header.expect("BAM output needs a header").clone();
-                let workers = NonZeroUsize::new(threads).unwrap_or(NonZeroUsize::MIN);
+                let workers = NonZeroUsize::new(threads / 4).unwrap_or(NonZeroUsize::MIN);
                 let mut writer = bam::io::Writer::from(
                     bgzf::io::MultithreadedWriter::with_worker_count(workers, io::stdout()),
                 );
@@ -368,7 +436,10 @@ impl OutputWriter {
     pub fn finish(self) -> io::Result<()> {
         match self {
             OutputWriter::Fastq(mut buf) => buf.flush(),
-            OutputWriter::Bam(writer, _) => writer.into_inner().finish().map(|_| ()),
+            // Stdout is line buffered and the BGZF end-of-file block holds no
+            // newline, so without this flush a write error on the last bytes
+            // would surface only at exit, where it is ignored.
+            OutputWriter::Bam(writer, _) => writer.into_inner().finish()?.flush(),
         }
     }
 }
@@ -500,7 +571,7 @@ mod tests {
             .add_program("basecaller", Map::<Program>::default())
             .add_comment("kept")
             .build();
-        let header = output_header(Some(&input)).unwrap();
+        let header = output_header(Some(&input), true).unwrap();
         assert_eq!(header.comments(), input.comments());
         let chopper = header.programs().as_ref().get(&b"chopper"[..]).unwrap();
         assert_eq!(

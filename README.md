@@ -171,7 +171,7 @@ What happens to the header and tags:
 
 | Input → output | Header | Tags |
 |---|---|---|
-| uBAM → uBAM | Passed through unchanged (`@HD`, `@RG`, `@PG`, `@CO`, ...), with a `@PG` line for chopper chained after the last program | Every tag is kept with its exact type and in its original order. Only the read name (`_segment_N` suffix when split), sequence and qualities change, plus `MM`/`ML`/`MN` under `--update-mods`. Flags are kept |
+| uBAM → uBAM | Passed through unchanged (`@HD`, `@RG`, `@PG`, `@CO`, ...), with a `@PG` line for chopper chained after the last program. A sort order (`SO`, `GO`, `SS`) is kept only when the output keeps the input order: with `--threads 1` and without `split-by-low-quality`. Otherwise it becomes `SO:unsorted` | Every tag is kept with its exact type and in its original order. Only the read name (`_segment_N` suffix when split), sequence and qualities change, plus `MM`/`ML`/`MN` under `--update-mods`. Flags are kept |
 | uBAM → FASTQ | Not written (FASTQ has none) | Every tag is written as a tab-separated SAM field after the read name, as `samtools fastq -T '*'` does |
 | FASTQ → uBAM | Built: `@HD VN:1.6 SO:unknown` and a `@PG` line for chopper | Tab-separated SAM fields after the read name become typed BAM tags; integers get the smallest fitting type, as htslib does. Free text after the read name (e.g. `runid=... ch=...`) is kept in a `CO:Z:` tag. Records get flag 4 (unmapped) |
 | FASTQ → FASTQ | — | Unchanged from earlier releases, byte for byte |
@@ -184,12 +184,15 @@ a single integer type, and an `RG:Z:` tag from FASTQ does not get a matching
 `@RG` header line.
 
 chopper stops with an error rather than write something wrong when the BAM
-holds an aligned read (trimming would invalidate its position and CIGAR, and a
-reverse-strand read is stored reverse complemented), a read without base
-qualities, or when FASTQ header fields after a tab are not valid SAM tags.
+holds an aligned read (trimming would invalidate its position and CIGAR), a
+secondary or supplementary record (the read would be written twice), a record
+flagged as reverse complemented (`MM` counts bases on the original strand), or
+a read without base qualities. FASTQ to BAM also stops on header fields after a
+tab that are not valid SAM tags, and on read names BAM cannot hold (empty, longer
+than 254 characters, or containing `@` or spaces).
 
-BAM input is decompressed on a single thread; BAM output is compressed on
-`--threads` threads.
+BAM input is decompressed on a single thread. BAM output is compressed on a
+quarter of `--threads` (at least one) extra threads.
 
 ## Base modification tags
 

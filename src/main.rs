@@ -388,8 +388,14 @@ fn filter(input: Input, args: Cli) {
     let output = args.output_format.unwrap_or(input.format());
     let header = match output {
         Format::Bam => Some(
-            formats::output_header(input.header())
-                .unwrap_or_else(|e| abort_on_input_error(&format!("cannot build BAM header: {e}"))),
+            // Records keep their input order and names only on one thread and
+            // when no read is split into renamed segments.
+            formats::output_header(
+                input.header(),
+                args.threads == 1
+                    && !matches!(args.trim_approach, Some(TrimApproach::SplitByLowQuality)),
+            )
+            .unwrap_or_else(|e| abort_on_input_error(&format!("cannot build BAM header: {e}"))),
         ),
         Format::Fastq => None,
     };
